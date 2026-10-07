@@ -91,3 +91,6 @@ button:disabled { opacity: .45; cursor: default; }
 .log .warn { color: #8a5a00; background: #fff6df; }
 .log .err { color: var(--danger); background: #fdeeee; user-select: text; }
 .foot { margin-top: 12px; font-size: 11px; color: var(--muted); }
+
+.check { display: block; font-size: 13px; margin: 4px 0 2px; }
+.check input { margin-right: 6px; }

@@ -5,7 +5,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '0.1.1';
+  const VERSION = '0.1.2';
   const MARK = 'SGG-BOT';
   const COLLECTION = 'sgg-delivery';
 
@@ -53,6 +53,30 @@
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const pad2 = (n) => String(n).padStart(2, '0');
   const ddmm = (iso) => { const d = new Date(iso); return pad2(d.getDate()) + '.' + pad2(d.getMonth() + 1); };
+
+  const isBotImage = (i) => String((i && i.title) || '').indexOf(MARK) === 0;
+  const FRESH_MS = 3 * 60 * 1000;
+
+  /**
+   * Отбирает из события доски картинки, на которые бот должен отреагировать.
+   * o: { uid, seen:Set, requireFresh, now } → { take:[items], why:[причины отказа] }
+   */
+  function pickImages(items, o) {
+    const out = { take: [], why: [] };
+    for (const i of items || []) {
+      if (!i || i.type !== 'image') continue;
+      if (isBotImage(i)) { out.why.push('картинка бота'); continue; }
+      if (o.seen && o.seen.has(i.id)) { out.why.push('уже видел'); continue; }
+      if (o.uid && i.createdBy && String(i.createdBy) !== String(o.uid)) { out.why.push('чужая'); continue; }
+      if (o.requireFresh) {
+        const t = Date.parse(i.createdAt);
+        if (isNaN(t)) { out.why.push('нет даты'); continue; }
+        if (Math.abs(o.now - t) > FRESH_MS) { out.why.push('старая'); continue; }
+      }
+      out.take.push(i);
+    }
+    return out;
+  }
 
   /** Ссылка на Jira: полный URL, либо ключ задачи + базовый адрес из настроек батча. */
   function normalizeJira(input, base) {
@@ -385,5 +409,5 @@
     };
   }
 
-  return { VERSION, MARK, TYPES, ROWS, DECKS, TYPE_BY_ID, DECK_BY_KEY, ROW_BY_KEY, DEFAULT_CHARACTERS, L, create, normalizeJira, gridFor, slotRect, fitImage, esc, ddmm };
+  return { VERSION, MARK, TYPES, ROWS, DECKS, TYPE_BY_ID, DECK_BY_KEY, ROW_BY_KEY, DEFAULT_CHARACTERS, L, create, pickImages, isBotImage, normalizeJira, gridFor, slotRect, fitImage, esc, ddmm };
 });

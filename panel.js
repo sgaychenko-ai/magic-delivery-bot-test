@@ -11,6 +11,9 @@
     charId: null, typeId: null, rec: null,
     user: { id: null, name: '' }, busy: false, lastImageId: null,
   };
+  const seen = new Set(); // картинки, про которые бот уже спрашивал
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const diagOn = () => recall('diag') !== '0';
 
   // ---------- мелочи ----------
   const remember = (k, v) => { try { localStorage.setItem('sgg:' + k, v); } catch (e) { /* хранилище закрыто */ } };
@@ -80,6 +83,7 @@
   function enqueue(entries) {
     for (const e of entries) {
       if (e.kind === 'board' && (state.queue.some((q) => q.id === e.id) || (state.current && state.current.id === e.id))) continue;
+      if (e.kind === 'board') seen.add(e.id);
       state.queue.push(e);
     }
     pump();
@@ -89,12 +93,14 @@
     if (state.current || state.loading || !state.queue.length) { render(); return; }
     state.loading = true;
     const next = state.queue.shift();
+    render();
     try {
       let raw = next.dataUrl, guess = null;
       if (next.kind === 'board') {
         const item = await core.getItem(next.id);
         if (!item) throw new Error('Картинку уже убрали с доски.');
-        raw = await item.getDataUrl();
+        if (SGG.isBotImage(item)) { state.loading = false; pump(); return; }
+        raw = await dataUrlOf(item);
         if (state.batch) {
           if (!state.rects) state.rects = await core.loadZoneRects(state.batch);
           const r = (await core.absRect(item)).rect;
@@ -113,6 +119,16 @@
     state.loading = false;
     await refreshExisting();
     if (!state.current && state.queue.length) pump();
+  }
+
+  /** Только что брошенная картинка может ещё загружаться — даём Miro несколько секунд. */
+  async function dataUrlOf(item) {
+    let err = null;
+    for (let n = 0; n < 6; n++) {
+      try { const u = await item.getDataUrl(); if (u) return u; } catch (e) { err = e; }
+      await sleep(1200);
+    }
+    throw err || new Error('Miro не отдал файл картинки.');
   }
 
   function finishCurrent() {
@@ -240,16 +256,23 @@
   }
 
   // ---------- события доски ----------
-  async function onItemsCreate(event) {
-    const images = (event.items || []).filter((i) => i.type === 'image' && String(i.title || '').indexOf(SGG.MARK) !== 0);
-    const mine = images.filter((i) => !state.user.id || !i.createdBy || i.createdBy === state.user.id);
-    if (mine.length && state.batch) enqueue(mine.map((i) => ({ kind: 'board', id: i.id })));
+  // Новую картинку ловим двумя путями: событием создания и тем, что Miro сам выделяет только что добавленное.
+  function onBoardEvent(source, items, requireFresh) {
+    if (!state.batch) return;
+    if (!(items || []).some((i) => i.type === 'image')) return;
+    const res = SGG.pickImages(items, { uid: state.user.id, seen, requireFresh, now: Date.now() });
+    if (res.take.length) {
+      if (diagOn()) log('Диагностика: ' + source + ' — поймал картинку ×' + res.take.length);
+      enqueue(res.take.map((i) => ({ kind: 'board', id: i.id })));
+    } else if (diagOn() && res.why.some((w) => w !== 'картинка бота' && w !== 'уже видел' && w !== 'старая')) {
+      log('Диагностика: ' + source + ' — пропуск: ' + res.why.join(', '));
+    }
   }
 
   async function takeSelected() {
     try {
       const sel = await board.getSelection();
-      const images = sel.filter((i) => i.type === 'image' && String(i.title || '').indexOf(SGG.MARK) !== 0);
+      const images = sel.filter((i) => i.type === 'image' && !SGG.isBotImage(i));
       if (!images.length) { log('На доске не выделена картинка (картинки, которые положил бот, не в счёт).', 'warn'); return; }
       enqueue(images.map((i) => ({ kind: 'board', id: i.id })));
     } catch (e) { fail('Не прочитал выделение', e); }
@@ -309,6 +332,8 @@
       log('Сохранил.', 'ok');
     } catch (e) { fail('Не сохранил', e); }
   });
+  $('diag').checked = diagOn();
+  $('diag').addEventListener('change', (e) => { remember('diag', e.target.checked ? '1' : '0'); log(e.target.checked ? 'Диагностика включена.' : 'Диагностика выключена.'); });
   $('showBatch').addEventListener('click', async () => {
     try {
       const ids = Object.keys(state.batch.zones).filter((k) => k.indexOf('deck:') === 0).map((k) => state.batch.zones[k]);
@@ -343,12 +368,13 @@
   try {
     try { const u = await board.getUserInfo(); state.user = { id: u.id, name: u.name || '' }; } catch (e) { /* без identity:read работаем без имени */ }
     await loadBatches();
-    board.ui.on('items:create', onItemsCreate);
+    board.ui.on('items:create', (e) => onBoardEvent('items:create', e.items, false));
+    board.ui.on('selection:update', (e) => onBoardEvent('selection', e.items, true));
     let data = null;
     try { data = await board.ui.getPanelData(); } catch (e) { /* открыли по иконке */ }
     if (data && Array.isArray(data.itemIds) && data.itemIds.length) enqueue(data.itemIds.map((id) => ({ kind: 'board', id })));
     else if (state.batch) {
-      const sel = (await board.getSelection()).filter((i) => i.type === 'image' && String(i.title || '').indexOf(SGG.MARK) !== 0);
+      const sel = (await board.getSelection()).filter((i) => i.type === 'image' && !SGG.isBotImage(i));
       if (sel.length) enqueue(sel.map((i) => ({ kind: 'board', id: i.id })));
     }
     render();
