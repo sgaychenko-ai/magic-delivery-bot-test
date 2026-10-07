@@ -457,6 +457,7 @@
       if (state.user.name && state.team.indexOf(state.user.name) < 0) state.team.push(state.user.name);
       let line = res.charName + ' · ' + res.title + (res.replaced ? ' — перезалит в карточке' : ' — в карточке') + (res.deckTitle ? ' и в деке «' + res.deckTitle + '»' : '');
       if (res.archived) line += ', в архив ушло: ' + res.archived;
+      if (res.notes) line += ' (с прошлой картинкой уехало заметок: ' + res.notes + ')';
       line += ' · статус ' + SGG.STATUS_BY_ID[res.status].label;
       line += ' · взял за ' + took.toFixed(1) + ' с, разложил за ' + ((performance.now() - t0) / 1000).toFixed(1) + ' с';
       log(line, 'ok');

@@ -5,7 +5,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '0.4.0';
+  const VERSION = '0.4.1';
   const MARK = 'SGG-BOT';
   const COLLECTION = 'sgg-delivery';
   const FORMAT = 5; // формат батча: 5 = над ячейкой фидбека появилась плашка Feedback, ячейка стала больше
@@ -662,6 +662,15 @@
     }
     const rectOf = (it) => ({ x: it.x, y: it.y, w: it.width, h: it.height });
 
+    // Заметки — то, чем люди подписывают картинку: стикер, текст, фигура, карточка. Положили на сабмит — едут вместе с ним.
+    const NOTE_TYPES = ['sticky_note', 'text', 'shape', 'card'];
+    const isNote = (it) => !!it && NOTE_TYPES.indexOf(it.type) >= 0;
+    /** Все заметки на доске. Картинки не читаются, поэтому запрос лёгкий — его можно делать при каждом раскрытии истории. */
+    async function readNotes() {
+      const parts = await Promise.all(NOTE_TYPES.map((t) => Promise.resolve().then(() => board.get({ type: t })).catch(() => [])));
+      return [].concat(...parts.map((p) => p || []));
+    }
+
     /** Элементы, которые положили в ячейку руками: центр внутри ячейки, и это не часть карточки и не картинка бота. */
     function collect(batch, charId, rec, cell, all, ignore) {
       const ui = batch.ui[charId], skip = new Set(ignore || []);
@@ -673,14 +682,17 @@
         && isFinite(it.x) && isFinite(it.y) && it.x >= l && it.x <= r && it.y >= t && it.y <= b);
     }
 
-    /** Запоминает в записи фидбека, что в нём лежит и как оно стоит относительно ячейки, — чтобы потом возить набор целиком. */
-    function seal(e, cell, found, byId) {
+    /**
+     * Запоминает в записи, что к ней приложено и как оно стоит относительно ячейки, — чтобы потом возить набор целиком.
+     * notesOnly — для сабмита: в описание идут только заметки («2 notes»), сама картинка сабмита не считается.
+     */
+    function seal(e, cell, found, byId, notesOnly) {
       e.items = found.map((it) => it.id);
       e.w = cell.w; e.h = cell.h;
       const own = [e.img, e.cap].map((id) => byId.get(id)).filter(Boolean);
       const objs = own.concat(found);
       if (objs.length) { const bb = bboxOf(objs); e.dx = bb.left - (cell.x - cell.w / 2); e.dy = bb.top - (cell.y - cell.h / 2); }
-      e.sum = describe((e.img && byId.get(e.img) ? [byId.get(e.img)] : []).concat(found));
+      e.sum = describe((!notesOnly && e.img && byId.get(e.img) ? [byId.get(e.img)] : []).concat(found));
       return e;
     }
 
@@ -869,8 +881,19 @@
       const past = pastSubmits(rec);
       if (open && !past.length) return { open: false, count: 0, rec, focus: [] };
       // Текущее содержимое карточки: превью, плашка и ячейка фидбека и всё, что бот принял как фидбек.
-      const current = [ui.pv, rec.pv && rec.pv.img, rec.pv && rec.pv.cap, ui.fbh, ui.fb].concat(rec.fb ? bundleIds(rec.fb) : []).filter(Boolean);
-      const got = await getMany(current.concat(...rec.arch.map((e) => [e.img, e.cap, e.bg].concat(e.items || [])), [ui.hist, ui.ar], rec.cells || []));
+      const mineIds = [ui.pv, rec.pv && rec.pv.img, rec.pv && rec.pv.cap, ui.fbh, ui.fb].concat(rec.fb ? bundleIds(rec.fb) : []).filter(Boolean);
+      const [got, notes, menuIds] = await Promise.all([
+        getMany(mineIds.concat(...rec.arch.map((e) => [e.img, e.cap, e.bg].concat(e.items || [])), [ui.hist, ui.ar], rec.cells || [])),
+        readNotes(),
+        store.get(menuKey(batch.id, charId)),
+      ]);
+      // Заметки, которые лежат на текущей картинке или в ячейке фидбека, боту ещё не известны — но ехать должны вместе с карточкой.
+      // Исключение — «прохожие»: заметки, которые лежали под карточкой до раскрытия и оказались накрыты ею. Их бот не трогает.
+      const passers = (menuIds || []).concat(open ? [] : rec.by || []);
+      const loose = [];
+      for (const id of [ui.pv, ui.fb]) { const c = got.get(id); if (c) loose.push(...collect(batch, charId, rec, rectOf(c), notes, passers)); }
+      for (const it of loose) if (!got.has(it.id)) got.set(it.id, it);
+      const current = [...new Set(mineIds.concat(loose.map((it) => it.id)))];
       const jobs = [];
       const fresh = []; // сабмиты, которым поле создано только что: [запись, поле]
       const shiftCurrent = (dy) => current.forEach((id) => { const it = got.get(id); if (it) { it.y += dy; jobs.push(it.sync()); } });
@@ -893,11 +916,25 @@
           else jobs.push(...placeInto(got, { left: x0 - w0 / 2 + pad, top: top + pad, w: w0 - pad * 2, h: h0 - pad * 2, capH: 30 }, e));
           top += h + L.gap;
         });
+        // Что уже лежит там, куда сейчас опустится карточка, — запоминаем, чтобы при сворачивании не утащить с собой.
+        const fbIt = got.get(ui.fb), mine = new Set(current);
+        const area = { l: x0 - w0 / 2, r: x0 + w0 / 2, t: top0, b: (fbIt ? fbIt.y + fbIt.height / 2 : top0 + h0) + (top - top0) };
+        rec.by = notes.filter((n) => !mine.has(n.id) && !hasParent(n) && n.x >= area.l && n.x <= area.r && n.y >= area.t && n.y <= area.b).map((n) => n.id).slice(0, 300);
         shiftCurrent(top - top0);
         rec.open = true; rec.shift = top - top0;
       } else {
         const ar = got.get(ui.ar);
         if (!ar) throw new Error('Хранилище прошлых сабмитов не найдено на доске — похоже, его удалили.');
+        // Заметку положили на прошлый сабмит, пока история была раскрыта, — теперь она его часть и уедет в хранилище с ним.
+        for (const e of rec.arch) {
+          const bg = e.bg ? got.get(e.bg) : null;
+          if (!bg) continue;
+          const extra = collect(batch, charId, rec, rectOf(bg), notes, passers);
+          if (!extra.length) continue;
+          for (const it of extra) got.set(it.id, it);
+          const had = (e.items || []).map((id) => got.get(id)).filter(Boolean);
+          seal(e, rectOf(bg), had.concat(extra), got, !(TYPE_BY_ID[e.type] || {}).fb);
+        }
         const slots = archiveLayout({ x: ar.x, y: ar.y, w: ar.width, h: ar.height }, rec.arch);
         shiftCurrent(-(rec.shift || 0));
         rec.arch.forEach((e, i) => {
@@ -907,7 +944,7 @@
           else jobs.push(...placeInto(got, inset(slot, 4), e));
         });
         (rec.cells || []).forEach((id) => { const it = got.get(id); if (it) jobs.push(board.remove(it)); }); // рамки из версий до 0.3.1
-        rec.open = false; rec.shift = 0; rec.cells = [];
+        rec.open = false; rec.shift = 0; rec.cells = []; rec.by = [];
       }
       const hist = got.get(ui.hist);
       if (hist) { const look = histLook(rec); hist.content = look.content; Object.assign(hist.style, look.style); jobs.push(hist.sync()); }
@@ -973,6 +1010,9 @@
       const cell = isFb ? zone.rect : fbCell ? rectOf(fbCell) : null;
       const byId = new Map(all.map((it) => [it.id, it]));
       const inCell = sweep && cell ? collect(batch, ch.id, rec, cell, all, openMenuIds) : [];
+      // Заметки на текущей картинке (стикер с текстом клиента рядом со скетчем) уедут в историю вместе с ней.
+      // Картинки сюда не берём: на карточке может лежать следующая картинка из очереди доставки.
+      const onPv = sweep && !isFb && rec.pv ? collect(batch, ch.id, rec, zone.rect, all.filter(isNote), (openMenuIds || []).concat(opts.sourceItemId ? [opts.sourceItemId] : [])) : [];
       const at = new Date().toISOString();
       const by = opts.userName || '';
       const redo = !isFb && !!opts.replace && !!rec.pv && rec.pv.type === type.id;
@@ -1022,7 +1062,7 @@
           mineItems = inCell.filter((it) => !had.has(it.id));
         } else mineItems = inCell;
       } else if (!redo) {
-        if (rec.pv) toArchive.push(rec.pv);
+        if (rec.pv) { if (onPv.length) seal(rec.pv, zone.rect, onPv, byId, true); toArchive.push(rec.pv); }
         if (rec.fb && !cell) toArchive.push(rec.fb);
         else if (rec.fb) { seal(rec.fb, cell, inCell, byId); if (isBundle(rec.fb) || (rec.fb.img && byId.get(rec.fb.img))) toArchive.push(rec.fb); }
         else if (inCell.length) {
@@ -1071,7 +1111,7 @@
       if (!drawnOk) warnings.push('Картинка на месте, но оформление карточки обновилось не полностью.');
       return {
         v, isFeedback: isFb, replaced: redo, title: entryTitle(entry), cardImageId: card.img, deckTitle: deck ? deck.title : null,
-        archived: toArchive.length, status: rec.status, warnings, charName: ch.name, typeLabel: type.label, rec,
+        archived: toArchive.length, notes: redo ? 0 : onPv.length, status: rec.status, warnings, charName: ch.name, typeLabel: type.label, rec,
       };
     }
 
