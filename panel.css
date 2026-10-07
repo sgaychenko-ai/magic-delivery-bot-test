@@ -1,0 +1,93 @@
+:root {
+  --ink: #1a1a1a;
+  --muted: #6b6f76;
+  --line: #e1e3e8;
+  --bg: #ffffff;
+  --soft: #f5f6f8;
+  --accent: #4262ff;
+  --accent-ink: #ffffff;
+  --danger: #d1343a;
+  --ok: #1a7f4b;
+  --radius: 8px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  padding: 0 0 16px;
+  min-width: 280px;
+}
+[hidden] { display: none !important; }
+
+.top {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0 12px; border-bottom: 1px solid var(--line); margin-bottom: 14px;
+}
+.brand { font-weight: 600; font-size: 15px; flex: 0 0 auto; }
+.batch-select { flex: 1 1 auto; min-width: 0; }
+.top .ghost { margin-left: auto; }
+
+h2 { font-size: 15px; margin: 0 0 6px; }
+p { margin: 0 0 12px; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+
+.field { display: block; margin: 0 0 12px; }
+.field > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+input[type="text"], input[type="number"], select {
+  width: 100%; height: 34px; padding: 0 10px; font: inherit; color: inherit;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg);
+}
+input:focus-visible, select:focus-visible, button:focus-visible, .drop:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+
+button { font: inherit; cursor: pointer; border-radius: var(--radius); }
+button:disabled { opacity: .45; cursor: default; }
+.primary, .secondary, .danger { height: 36px; padding: 0 14px; border: 1px solid transparent; width: 100%; margin-bottom: 8px; }
+.primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.secondary { background: var(--bg); border-color: var(--line); color: var(--ink); }
+.danger { background: var(--bg); border-color: var(--danger); color: var(--danger); }
+.ghost { background: none; border: 0; color: var(--accent); padding: 4px 6px; }
+.link { background: none; border: 0; color: var(--accent); padding: 0; font-size: 12px; }
+
+.drop {
+  border: 1.5px dashed #b9bdc7; border-radius: var(--radius); background: var(--soft);
+  min-height: 132px; display: flex; align-items: center; justify-content: center;
+  text-align: center; padding: 10px; position: relative; overflow: hidden;
+}
+.drop.over { border-color: var(--accent); background: #eef1ff; }
+.drop b { display: block; margin-bottom: 2px; }
+.drop span { font-size: 12px; color: var(--muted); }
+.drop img { max-width: 100%; max-height: 160px; display: block; border-radius: 4px; }
+.row-links { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; margin: 6px 0 14px; font-size: 12px; }
+.row-links .muted { margin-left: auto; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  height: 32px; padding: 0 12px; border: 1px solid var(--line); background: var(--bg);
+  color: var(--ink); border-radius: 16px;
+}
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+.existing { background: var(--soft); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 12px; font-size: 13px; }
+.existing label { margin-right: 14px; white-space: nowrap; }
+#existingText { margin-bottom: 4px; }
+.route { font-size: 12px; min-height: 17px; }
+
+.actions { display: flex; gap: 8px; }
+.actions button { margin-bottom: 0; }
+.actions .secondary { flex: 0 0 110px; }
+
+.progress { height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden; margin: 4px 0 10px; }
+.progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+
+.log { margin-top: 14px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+.log div { padding: 6px 8px; border-radius: 6px; background: var(--soft); overflow-wrap: anywhere; }
+.log .ok { color: var(--ok); }
+.log .warn { color: #8a5a00; background: #fff6df; }
+.log .err { color: var(--danger); background: #fdeeee; user-select: text; }
+.foot { margin-top: 12px; font-size: 11px; color: var(--muted); }

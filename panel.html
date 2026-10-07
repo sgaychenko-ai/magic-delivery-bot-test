@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SGG Delivery Bot</title>
+    <link rel="stylesheet" href="panel.css" />
+    <script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
+    <script src="core.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">Delivery Bot</div>
+      <select id="batchSelect" class="batch-select" aria-label="Батч" hidden></select>
+      <button id="toSetup" class="ghost" type="button" title="Настройки батча">Батч</button>
+      <button id="toDelivery" class="ghost" type="button" hidden>← Назад</button>
+    </header>
+
+    <!-- Нет батча на доске -->
+    <section id="viewEmpty" class="view" hidden>
+      <h2>На этой доске ещё нет батча</h2>
+      <p class="muted">Бот построит тестовую секцию: Comparison Deck слева и колонки персонажей справа. Рабочие доски он не трогает.</p>
+      <label class="field">
+        <span>Название батча</span>
+        <input id="newName" type="text" value="TEST BATCH" />
+      </label>
+      <label class="field">
+        <span>Сколько персонажей</span>
+        <input id="newCount" type="number" min="1" max="15" value="15" />
+      </label>
+      <button id="createBatch" class="primary" type="button">Создать тестовый батч</button>
+      <div id="createProgress" class="progress" hidden><i></i></div>
+    </section>
+
+    <!-- Доставка -->
+    <section id="viewDelivery" class="view" hidden>
+      <div id="drop" class="drop" tabindex="0">
+        <img id="thumb" alt="" hidden />
+        <div id="dropHint">
+          <b>Кинь картинку на доску</b>
+          <span>или перетащи файл сюда, или вставь Ctrl+V</span>
+        </div>
+        <input id="file" type="file" accept="image/*" hidden />
+      </div>
+      <div class="row-links">
+        <button id="pickFile" class="link" type="button">Выбрать файл</button>
+        <button id="takeSelected" class="link" type="button">Взять выделенную на доске</button>
+        <span id="queueInfo" class="muted"></span>
+      </div>
+
+      <label class="field">
+        <span>Персонаж</span>
+        <select id="charSelect"></select>
+      </label>
+
+      <div class="field">
+        <span>Основная доставка</span>
+        <div id="typesPrimary" class="chips"></div>
+      </div>
+      <div class="field">
+        <span>Продакшен</span>
+        <div id="typesSecondary" class="chips"></div>
+      </div>
+
+      <label id="jiraField" class="field" hidden>
+        <span>Задача в Jira (ссылка или ключ)</span>
+        <input id="jira" type="text" placeholder="https://…/browse/SGG-123" />
+      </label>
+
+      <div id="existing" class="existing" hidden>
+        <div id="existingText"></div>
+        <label><input type="radio" name="mode" value="replace" checked /> Заменить</label>
+        <label><input type="radio" name="mode" value="add" /> Добавить рядом</label>
+      </div>
+
+      <p id="route" class="route muted"></p>
+
+      <div class="actions">
+        <button id="place" class="primary" type="button" disabled>Разложить</button>
+        <button id="skip" class="secondary" type="button" disabled>Пропустить</button>
+      </div>
+    </section>
+
+    <!-- Настройки батча -->
+    <section id="viewSetup" class="view" hidden>
+      <h2 id="setupTitle">Батч</h2>
+      <label class="field">
+        <span>Адрес Jira (чтобы хватало ключа задачи)</span>
+        <input id="jiraBase" type="text" placeholder="https://jira.example.com" />
+      </label>
+      <button id="saveSetup" class="secondary" type="button">Сохранить</button>
+      <hr />
+      <button id="showBatch" class="secondary" type="button">Показать батч на доске</button>
+      <button id="newBatch" class="secondary" type="button">Создать ещё один тестовый батч</button>
+      <button id="deleteBatch" class="danger" type="button">Удалить батч с доски</button>
+      <div id="deleteProgress" class="progress" hidden><i></i></div>
+      <p class="muted small">Удаление убирает зоны, картинки и подписи, которые создал бот. Остальное на доске остаётся.</p>
+    </section>
+
+    <div id="log" class="log" aria-live="polite"></div>
+    <footer class="foot"><span id="version"></span></footer>
+
+    <script src="panel.js"></script>
+  </body>
+</html>
