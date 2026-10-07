@@ -5,7 +5,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '0.1.3';
+  const VERSION = '0.1.4';
   const MARK = 'SGG-BOT';
   const COLLECTION = 'sgg-delivery';
 
@@ -145,7 +145,15 @@
 
   function create(miro) {
     const board = miro.board;
-    const store = board.storage.collection(COLLECTION);
+    // window.miro — «ленивая» обёртка: метод надо брать и вызывать одним действием, с уже готовыми аргументами.
+    // Если между «взял метод» и «вызвал» случится другое обращение к miro, вызов теряет свой объект
+    // и падает с Symbol(Commander). Поэтому хранилище завёрнуто в обычные функции.
+    const coll = () => miro.board.storage.collection(COLLECTION);
+    const store = {
+      get: (k) => coll().get(k),
+      set: (k, v) => coll().set(k, v),
+      remove: (k) => coll().remove(k),
+    };
     const hasParent = (it) => it && it.parentId && it.parentId !== 'null';
 
     async function getItem(id) {
@@ -276,7 +284,8 @@
         const batch = { id, name, jiraBase: '', chars, zones, v: 1 };
         await step('запись батча в хранилище доски', () => saveBatch(batch));
         await step('запись списка элементов', () => store.set('gen:' + id, gen));
-        await step('запись списка батчей', async () => store.set('batches', (await listBatches()).concat([{ id, name }])));
+        const list = (await step('чтение списка батчей', listBatches)).concat([{ id, name }]);
+        await step('запись списка батчей', () => store.set('batches', list));
         try { await board.viewport.zoomTo(made[0]); } catch (e) { /* не критично */ }
         return batch;
       } catch (e) {
@@ -310,7 +319,8 @@
       await inChunks(list, 6, async (id) => { await removeIds([id]); if (onProgress) onProgress(++done, list.length); });
       await store.remove('gen:' + batchId);
       await store.remove('b:' + batchId);
-      await store.set('batches', (await listBatches()).filter((b) => b.id !== batchId));
+      const rest = (await listBatches()).filter((b) => b.id !== batchId);
+      await store.set('batches', rest);
     }
 
     // ---------- раскладка ----------
