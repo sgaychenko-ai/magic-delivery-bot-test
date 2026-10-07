@@ -21,13 +21,13 @@ body {
 }
 [hidden] { display: none !important; }
 
-.top {
-  display: flex; align-items: center; gap: 8px;
-  padding: 4px 0 12px; border-bottom: 1px solid var(--line); margin-bottom: 14px;
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.tabs button {
+  background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  padding: 8px 10px; color: var(--muted); font-weight: 600;
 }
-.brand { font-weight: 600; font-size: 15px; flex: 0 0 auto; }
-.batch-select { flex: 1 1 auto; min-width: 0; }
-.top .ghost { margin-left: auto; }
+.tabs button[aria-current="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.batch-select { margin-bottom: 12px; }
 
 h2 { font-size: 15px; margin: 0 0 6px; }
 p { margin: 0 0 12px; }
@@ -51,7 +51,6 @@ button:disabled { opacity: .45; cursor: default; }
 .primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .secondary { background: var(--bg); border-color: var(--line); color: var(--ink); }
 .danger { background: var(--bg); border-color: var(--danger); color: var(--danger); }
-.ghost { background: none; border: 0; color: var(--accent); padding: 4px 6px; }
 .link { background: none; border: 0; color: var(--accent); padding: 0; font-size: 12px; }
 
 .drop {
@@ -66,21 +65,38 @@ button:disabled { opacity: .45; cursor: default; }
 .row-links { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; margin: 6px 0 14px; font-size: 12px; }
 .row-links .muted { margin-left: auto; }
 
+/* Чип типа доставки: полоска слева — цвет стадии на доске. */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
-  height: 32px; padding: 0 12px; border: 1px solid var(--line); background: var(--bg);
-  color: var(--ink); border-radius: 16px;
+  height: 32px; padding: 0 12px 0 10px; border: 1px solid var(--line); border-left: 4px solid var(--chip, var(--line));
+  background: var(--bg); color: var(--ink); border-radius: 6px;
 }
-.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.chip[aria-pressed="true"] { background: var(--chip, var(--accent)); border-color: var(--chip, var(--accent)); color: #fff; font-weight: 600; }
 
-.existing { background: var(--soft); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 12px; font-size: 13px; }
-.existing label { margin-right: 14px; white-space: nowrap; }
-#existingText { margin-bottom: 4px; }
 .route { font-size: 12px; min-height: 17px; }
-
 .actions { display: flex; gap: 8px; }
 .actions button { margin-bottom: 0; }
 .actions .secondary { flex: 0 0 110px; }
+
+.status-row { display: flex; align-items: center; gap: 8px; }
+.swatch { flex: 0 0 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); }
+.artists { display: flex; flex-direction: column; gap: 6px; }
+.artist { display: grid; grid-template-columns: 10px 58px 1fr; align-items: center; gap: 8px; font-size: 13px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: block; }
+
+.timeline { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.tl-row {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left;
+  border: 0; border-left: 4px solid var(--chip, #888); border-radius: 0; background: var(--soft);
+  padding: 5px 8px; font-size: 12px; color: var(--ink);
+}
+.tl-row b { font-weight: 600; }
+.tl-row span { color: var(--muted); }
+
+.legacy { background: #fff6df; color: #8a5a00; border-radius: var(--radius); padding: 8px 10px; margin-bottom: 12px; font-size: 13px; }
+.legacy button { margin: 8px 0 0; }
+.check { display: block; font-size: 13px; margin: 4px 0 2px; }
+.check input { margin-right: 6px; }
 
 .progress { height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden; margin: 4px 0 10px; }
 .progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
@@ -91,6 +107,3 @@ button:disabled { opacity: .45; cursor: default; }
 .log .warn { color: #8a5a00; background: #fff6df; }
 .log .err { color: var(--danger); background: #fdeeee; user-select: text; }
 .foot { margin-top: 12px; font-size: 11px; color: var(--muted); }
-
-.check { display: block; font-size: 13px; margin: 4px 0 2px; }
-.check input { margin-right: 6px; }

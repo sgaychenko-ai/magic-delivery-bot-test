@@ -9,17 +9,21 @@
     <script src="core.js"></script>
   </head>
   <body>
-    <header class="top">
-      <div class="brand">Delivery Bot</div>
-      <select id="batchSelect" class="batch-select" aria-label="Батч" hidden></select>
-      <button id="toSetup" class="ghost" type="button" title="Настройки батча">Батч</button>
-      <button id="toDelivery" class="ghost" type="button" hidden>← Назад</button>
-    </header>
+    <nav id="tabs" class="tabs" hidden>
+      <button type="button" data-view="Delivery">Доставка</button>
+      <button type="button" data-view="Char">Персонаж</button>
+      <button type="button" data-view="Setup">Батч</button>
+    </nav>
+    <select id="batchSelect" class="batch-select" aria-label="Батч" hidden></select>
 
     <!-- Нет батча на доске -->
     <section id="viewEmpty" class="view" hidden>
       <h2>На этой доске ещё нет батча</h2>
-      <p class="muted">Бот построит тестовую секцию: Comparison Deck слева и колонки персонажей справа. Рабочие доски он не трогает.</p>
+      <p class="muted">Бот построит тестовую секцию: Comparison Deck слева, карточки персонажей справа, под ними архив версий. Рабочие доски он не трогает.</p>
+      <div id="legacy" class="legacy" hidden>
+        <span id="legacyText"></span>
+        <button id="legacyDelete" class="danger" type="button">Удалить старый батч</button>
+      </div>
       <label class="field">
         <span>Название батча</span>
         <input id="newName" type="text" value="TEST BATCH" />
@@ -29,6 +33,7 @@
         <input id="newCount" type="number" min="1" max="15" value="15" />
       </label>
       <button id="createBatch" class="primary" type="button">Создать тестовый батч</button>
+      <button id="cancelNew" class="secondary" type="button" hidden>Назад</button>
       <div id="createProgress" class="progress" hidden><i></i></div>
     </section>
 
@@ -38,7 +43,7 @@
         <img id="thumb" alt="" hidden />
         <div id="dropHint">
           <b>Кинь картинку на доску</b>
-          <span>или перетащи файл сюда, или вставь Ctrl+V</span>
+          <span>или перетащи файл сюда, или вставь из буфера</span>
         </div>
         <input id="file" type="file" accept="image/*" hidden />
       </div>
@@ -55,11 +60,15 @@
 
       <div class="field">
         <span>Основная доставка</span>
-        <div id="typesPrimary" class="chips"></div>
+        <div id="types-main" class="chips"></div>
       </div>
       <div class="field">
         <span>Продакшен</span>
-        <div id="typesSecondary" class="chips"></div>
+        <div id="types-prod" class="chips"></div>
+      </div>
+      <div class="field">
+        <span>Фидбек</span>
+        <div id="types-fb" class="chips"></div>
       </div>
 
       <label id="jiraField" class="field" hidden>
@@ -67,11 +76,10 @@
         <input id="jira" type="text" placeholder="https://…/browse/SGG-123" />
       </label>
 
-      <div id="existing" class="existing" hidden>
-        <div id="existingText"></div>
-        <label><input type="radio" name="mode" value="replace" checked /> Заменить</label>
-        <label><input type="radio" name="mode" value="add" /> Добавить рядом</label>
-      </div>
+      <label class="field">
+        <span>Статус после доставки</span>
+        <select id="statusAfter"></select>
+      </label>
 
       <p id="route" class="route muted"></p>
 
@@ -79,6 +87,31 @@
         <button id="place" class="primary" type="button" disabled>Разложить</button>
         <button id="skip" class="secondary" type="button" disabled>Пропустить</button>
       </div>
+    </section>
+
+    <!-- Персонаж -->
+    <section id="viewChar" class="view" hidden>
+      <label class="field">
+        <span>Персонаж</span>
+        <select id="charSelect2"></select>
+      </label>
+      <label class="field">
+        <span>Статус</span>
+        <div class="status-row">
+          <i id="statusSwatch" class="swatch"></i>
+          <select id="statusSelect"></select>
+        </div>
+      </label>
+      <div class="field">
+        <span>Кто делает</span>
+        <div id="artists" class="artists"></div>
+        <datalist id="people"></datalist>
+      </div>
+      <button id="saveArtists" class="secondary" type="button">Сохранить исполнителей</button>
+      <hr />
+      <h2>История</h2>
+      <div id="timeline" class="timeline"></div>
+      <button id="showArchive" class="secondary" type="button">Показать архив на доске</button>
     </section>
 
     <!-- Настройки батча -->
@@ -95,7 +128,7 @@
       <button id="newBatch" class="secondary" type="button">Создать ещё один тестовый батч</button>
       <button id="deleteBatch" class="danger" type="button">Удалить батч с доски</button>
       <div id="deleteProgress" class="progress" hidden><i></i></div>
-      <p class="muted small">Удаление убирает зоны, картинки и подписи, которые создал бот. Остальное на доске остаётся.</p>
+      <p class="muted small">Удаление убирает карточки, деку, картинки и подписи, которые создал бот. Остальное на доске остаётся.</p>
     </section>
 
     <div id="log" class="log" aria-live="polite"></div>
