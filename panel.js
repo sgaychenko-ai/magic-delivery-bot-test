@@ -189,18 +189,42 @@
     $('teamNames').value = state.team.join('\n');
     $('batchSelect').value = id;
     remember('batch', id);
-    for (const sid of ['charSelect', 'charSelect2']) {
-      const cs = $(sid);
-      cs.innerHTML = '';
-      cs.add(new Option('— выбери персонажа —', ''));
-      for (const ch of state.batch.chars) cs.add(new Option(ch.name, ch.id));
-    }
+    // Имена могли поправить руками прямо на карточках — доска главнее.
+    try { for (const c of await core.syncNames(state.batch)) log('Имя с доски: ' + c.from + ' → ' + c.to, 'ok'); } catch (e) { /* останутся прежние имена */ }
+    fillChars();
     const last = recall('char:' + id);
     state.charId = state.batch.chars.some((c) => c.id === last) ? last : null;
     $('setupTitle').textContent = state.batch.name;
     $('jiraBase').value = state.batch.jiraBase || '';
     await loadChar();
   }
+
+  function fillChars() {
+    for (const sid of ['charSelect', 'charSelect2']) {
+      const cs = $(sid);
+      cs.innerHTML = '';
+      cs.add(new Option('— выбери персонажа —', ''));
+      for (const ch of state.batch.chars) cs.add(new Option(ch.name, ch.id));
+      cs.value = state.charId || '';
+    }
+  }
+
+  /** Невидимая часть бота сообщила, что на доске переименовали персонажа: подхватываем имена без перезагрузки панели. */
+  async function onNamesChanged(batchId) {
+    if (!state.batch || state.batch.id !== batchId) return;
+    try {
+      const fresh = await core.getBatch(batchId);
+      if (!fresh || !state.batch || state.batch.id !== batchId) return;
+      for (const ch of state.batch.chars) { const f = fresh.chars.find((c) => c.id === ch.id); if (f) ch.name = f.name; }
+      fillChars();
+      if (state.view === 'Team') renderTeam();
+      render();
+    } catch (e) { /* имена обновятся при следующем открытии панели */ }
+  }
+  try {
+    const live = new BroadcastChannel(SGG.CHANNEL);
+    live.onmessage = (e) => { if (e.data && e.data.changed === 'names') onNamesChanged(e.data.batch); };
+  } catch (e) { /* без канала имена обновятся при следующем открытии панели */ }
 
   let charLoad = 0;
   async function loadChar() {

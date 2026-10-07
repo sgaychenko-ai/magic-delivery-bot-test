@@ -5,7 +5,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '0.3.2';
+  const VERSION = '0.3.3';
   const MARK = 'SGG-BOT';
   const COLLECTION = 'sgg-delivery';
   const FORMAT = 4; // формат батча: 4 = карточки с назначениями по фазам
@@ -85,6 +85,16 @@
   const pad2 = (n) => String(n).padStart(2, '0');
   const ddmm = (iso) => { const d = new Date(iso); return pad2(d.getDate()) + '.' + pad2(d.getMonth() + 1); };
   const para = (html) => '<p>' + html + '</p>';
+
+  /** Текст элемента доски без разметки — так бот читает имя, которое поправили руками прямо на карточке. */
+  function plainText(html) {
+    return String(html || '').replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+  }
+  /** Подпись под картинкой в Comparison Deck: имя персонажа и, если в секции несколько типов, какой это тип. */
+  const deckCaption = (name, deck, type) => esc(name) + (deck.types.length > 1 && type ? ' · ' + type.short : '');
+  /** Прямоугольник, уменьшенный со всех сторон на p, с тем же местом под подпись. */
+  const inset = (box, p) => ({ left: box.left + p, top: box.top + p, w: box.w - p * 2, h: box.h - p * 2, capH: box.capH });
 
   const isBotImage = (i) => String((i && i.title) || '').indexOf(MARK) === 0;
   const FRESH_MS = 3 * 60 * 1000;
@@ -252,6 +262,11 @@
       content: para(t ? '<strong>' + t.en + '</strong>' : 'Feedback'),
       style: Object.assign({}, BASE, { textAlign: 'left', textAlignVertical: 'top', fillColor: t ? t.tint : '#FAFAFA', borderColor: t ? t.color : '#D0D0D0', borderWidth: t ? 2 : 1, color: t ? t.color : '#9A9A9A' }),
     };
+  };
+  // Поле под прошлым сабмитом в раскрытой истории: рамка цвета стадии, у фидбека — ещё и подложка его цвета.
+  const pastLook = (e) => {
+    const t = TYPE_BY_ID[e.type] || {};
+    return Object.assign({}, BASE, { fillColor: t.tint || '#FFFFFF', borderColor: t.color || '#D0D0D0', borderWidth: 2, color: '#8C8C8C' });
   };
   // Кнопка истории стоит под полоской стадий и не двигается: раскрыл и свернул в одном и том же месте.
   const histLook = (rec) => {
@@ -466,7 +481,7 @@
           if (open) { ids.push(...open); await store.remove(menuKey(batchId, ch.id)); }
           const rec = await store.get(charKey(batchId, ch.id));
           if (!rec) return;
-          for (const e of [rec.pv, rec.fb].concat(rec.arch || [], Object.values(rec.deck || {}))) if (e) ids.push(e.img, e.cap);
+          for (const e of [rec.pv, rec.fb].concat(rec.arch || [], Object.values(rec.deck || {}))) if (e) ids.push(e.img, e.cap, e.bg);
           ids.push(...(rec.cells || []), ...(rec.menu || []));
           await store.remove(charKey(batchId, ch.id));
         });
@@ -650,7 +665,7 @@
       await Promise.allSettled(jobs);
       return [img, cap].filter(Boolean);
     }
-    const moveToArchive = (arRect, index, entry) => moveInto(archiveSlot(arRect, index), entry);
+    const moveToArchive = (arRect, index, entry) => moveInto(inset(archiveSlot(arRect, index), 4), entry);
 
     /** Ставит уже прочитанные картинку и подпись в прямоугольник box; возвращает запущенные обновления. */
     function placeInto(got, box, entry) {
@@ -684,30 +699,53 @@
       const past = pastSubmits(rec);
       if (open && !past.length) return { open: false, count: 0, rec, focus: [] };
       const current = [ui.pv, rec.pv && rec.pv.img, rec.pv && rec.pv.cap, ui.fb, rec.fb && rec.fb.img, rec.fb && rec.fb.cap].filter(Boolean);
-      const got = await getMany(current.concat(...rec.arch.map((e) => [e.img, e.cap]), [ui.hist, ui.ar], rec.cells || []));
+      const got = await getMany(current.concat(...rec.arch.map((e) => [e.img, e.cap, e.bg]), [ui.hist, ui.ar], rec.cells || []));
       const jobs = [];
+      const fresh = []; // сабмиты, которым поле создано только что: их картинки надо поднять над полем
       const shiftCurrent = (dy) => current.forEach((id) => { const it = got.get(id); if (it) { it.y += dy; jobs.push(it.sync()); } });
+      // Поле под сабмитом создаётся один раз и дальше ездит вместе с картинкой: раскрыли — в карточку, свернули — в хранилище.
+      const field = (e, x, y, w, h) => {
+        const bg = e.bg ? got.get(e.bg) : null;
+        if (bg) { bg.x = x; bg.y = y; bg.width = w; bg.height = h; jobs.push(bg.sync()); return; }
+        jobs.push(board.createShape({ shape: 'rectangle', content: '', x, y, width: w, height: h, style: pastLook(e) }).then((it) => { e.bg = it.id; fresh.push(e); }));
+      };
       if (open) {
         const pv = got.get(ui.pv);
         if (!pv) throw new Error('Превью персонажа не найдено на доске — похоже, его удалили.');
-        const stepY = pv.height + L.gap, shift = past.length * stepY, top0 = pv.y - pv.height / 2, pad = 8;
+        const stepY = pv.height + L.gap, shift = past.length * stepY, top0 = pv.y - pv.height / 2, pad = 8, x0 = pv.x, y0 = pv.y;
         const box0 = { left: pv.x - pv.width / 2 + pad, w: pv.width - pad * 2, h: pv.height - pad * 2, capH: 30 };
         shiftCurrent(shift);
-        past.forEach((e, i) => jobs.push(...placeInto(got, Object.assign({ top: top0 + i * stepY + pad }, box0), e)));
+        past.forEach((e, i) => {
+          field(e, x0, y0 + i * stepY, pv.width, pv.height);
+          jobs.push(...placeInto(got, Object.assign({ top: top0 + i * stepY + pad }, box0), e));
+        });
         rec.open = true; rec.shift = shift;
       } else {
         const ar = got.get(ui.ar);
         if (!ar) throw new Error('Хранилище прошлых сабмитов не найдено на доске — похоже, его удалили.');
         const arRect = { x: ar.x, y: ar.y, w: ar.width, h: ar.height };
         shiftCurrent(-(rec.shift || 0));
-        rec.arch.forEach((e, i) => jobs.push(...placeInto(got, archiveSlot(arRect, i), e)));
+        rec.arch.forEach((e, i) => {
+          const slot = archiveSlot(arRect, i);
+          if (e.bg && got.get(e.bg)) field(e, slot.left + slot.w / 2, slot.top + slot.h / 2, slot.w, slot.h);
+          jobs.push(...placeInto(got, inset(slot, 4), e));
+        });
         (rec.cells || []).forEach((id) => { const it = got.get(id); if (it) jobs.push(board.remove(it)); }); // рамки из версий до 0.3.1
         rec.open = false; rec.shift = 0; rec.cells = [];
       }
       const hist = got.get(ui.hist);
       if (hist) { const look = histLook(rec); hist.content = look.content; Object.assign(hist.style, look.style); jobs.push(hist.sync()); }
-      jobs.push(store.set(charKey(batch.id, charId), rec));
+      // Если новых полей не будет, запись уходит вместе с движением — без лишнего круга.
+      const creating = open && past.some((e) => !(e.bg && got.get(e.bg)));
+      if (!creating) jobs.push(store.set(charKey(batch.id, charId), rec));
       await Promise.allSettled(jobs);
+      if (creating) {
+        // Новое поле Miro кладёт поверх всего — поднимаем над ним картинку и подпись. Нужно один раз на сабмит.
+        const tail = [store.set(charKey(batch.id, charId), rec)];
+        const lift = [].concat(...fresh.map((e) => [got.get(e.img), got.get(e.cap)])).filter(Boolean);
+        if (lift.length) tail.push(Promise.resolve().then(() => board.bringToFront(lift)).catch(() => null));
+        await Promise.allSettled(tail);
+      }
       return { open: rec.open, count: rec.arch.length, rec, focus: [hist, got.get(ui.fb)].filter(Boolean) };
     }
 
@@ -767,7 +805,7 @@
       if (deck) {
         const slot = deckSlot(deckZone.rect, deckGrid(deckZone.rect), deckIdx);
         deckOverflow = slot.overflow;
-        const dcap = esc(ch.name) + (deck.types.length > 1 ? ' · ' + type.short : '');
+        const dcap = deckCaption(ch.name, deck, type);
         draws.push(drawAt(slot, deckZone.frame, Object.assign({}, base, { caption: dcap, color: '#555555' }, opts.deckDataUrl ? { dataUrl: opts.deckDataUrl } : {})));
       }
       const drawn = await Promise.allSettled(draws);
@@ -821,6 +859,39 @@
         v, isFeedback: isFb, replaced: redo, title: entryTitle(entry), cardImageId: card.img, deckTitle: deck ? deck.title : null,
         archived: toArchive.length, status: rec.status, warnings, charName: ch.name, typeLabel: type.label, rec,
       };
+    }
+
+    // ---------- имена ----------
+    /**
+     * Имя персонажа поменяли: записываем его в батч и переписываем подписи в Comparison Deck и в хранилище.
+     * → true, если что-то изменилось.
+     */
+    async function renameChar(batch, charId, name) {
+      const clean = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 60); // имя уже без разметки
+      const ch = batch.chars.find((c) => c.id === charId);
+      if (!ch || !clean) return false;
+      const fresh = (await getBatch(batch.id)) || batch; // батч мог обновить кто-то ещё — правим свежую копию
+      const fc = fresh.chars.find((c) => c.id === charId);
+      ch.name = clean;
+      if (!fc || fc.name === clean) return false;
+      fc.name = clean;
+      const [rec] = await Promise.all([getChar(batch.id, charId), saveBatch(fresh)]);
+      const want = [[batch.ui[charId].ar, para(esc(clean))]];
+      for (const d of DECKS) { const e = rec.deck[d.key]; if (e) want.push([e.cap, para(deckCaption(clean, d, TYPE_BY_ID[e.type]))]); }
+      const got = await getMany(want.map((w) => w[0]));
+      await Promise.allSettled(want.map(([id, content]) => { const it = got.get(id); if (!it) return null; it.content = content; return it.sync(); }));
+      return true;
+    }
+
+    /** Сверяет имена в батче с тем, что написано на карточках. Доска главнее. → [{ charId, from, to }] */
+    async function syncNames(batch) {
+      const got = await getMany(batch.chars.map((c) => batch.ui[c.id].name));
+      const out = [];
+      for (const ch of batch.chars) {
+        const it = got.get(batch.ui[ch.id].name), to = it ? plainText(it.content).slice(0, 60) : '', from = ch.name;
+        if (to && to !== from) { await renameChar(batch, ch.id, to); out.push({ charId: ch.id, from, to }); }
+      }
+      return out;
     }
 
     /** Переносит экран к архиву персонажа — это и есть «раскрыть историю». */
@@ -879,12 +950,12 @@
 
     return {
       store, listBatches, getBatch, saveBatch, getChar, getTeam, setTeam, addToTeam, buildTestBatch, deleteBatch, place, setStatus, setAssign,
-      refreshCard, openMenu, closeMenu, statusOptions, assignOptions, setHistory, toggleHistory, collapseAll, zoomToArchive, absRect, getItem, loadZoneRects, guessTarget, findButton, loadBatchesFull,
+      refreshCard, renameChar, syncNames, openMenu, closeMenu, statusOptions, assignOptions, setHistory, toggleHistory, collapseAll, zoomToArchive, absRect, getItem, loadZoneRects, guessTarget, findButton, loadBatchesFull,
     };
   }
 
   return {
     VERSION, MARK, FORMAT, STATUSES, STATUS_BY_ID, STAGES, STAGE_COLS, PHASES, TYPES, TYPE_BY_ID, DECKS, DECK_BY_KEY, DEFAULT_CHARACTERS, L,
-    create, latestVersion, CHANNEL, pickImages, isBotImage, normalizeJira, shortName, phaseOfStage, deckGrid, deckSlot, archiveSlot, fitSide, timeline, pastSubmits, entryTitle, esc, ddmm,
+    create, latestVersion, CHANNEL, plainText, pickImages, isBotImage, normalizeJira, shortName, phaseOfStage, deckGrid, deckSlot, archiveSlot, fitSide, timeline, pastSubmits, entryTitle, esc, ddmm,
   };
 });

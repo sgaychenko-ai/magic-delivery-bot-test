@@ -55,12 +55,42 @@
     if (boardId === undefined) { try { boardId = (await board.getInfo()).id; } catch (e) { boardId = null; } }
     return boardId;
   }
+  let channel = null;
   try {
-    const ch = new BroadcastChannel(SGG.CHANNEL);
-    ch.onmessage = async (e) => {
-      if (e.data && e.data.ask === 'headless') ch.postMessage({ headless: SGG.VERSION, board: await myBoard(), to: e.data.from });
+    channel = new BroadcastChannel(SGG.CHANNEL);
+    channel.onmessage = async (e) => {
+      if (e.data && e.data.ask === 'headless') channel.postMessage({ headless: SGG.VERSION, board: await myBoard(), to: e.data.from });
     };
   } catch (e) { /* без канала панель просто не сможет проверить версию */ }
+  const tell = (msg) => { try { if (channel) channel.postMessage(msg); } catch (e) { /* панель узнает при следующем открытии */ } };
+
+  // ---------- имя персонажа поправили руками на карточке ----------
+  // Miro не сообщает, что текст изменился. Зато плашку имени при правке выделяют: когда выделение с неё уходит,
+  // бот перечитывает текст и, если он другой, переписывает подписи в Comparison Deck.
+  let lastName = null; // { batch, charId, id } — плашка имени, выделенная прямо сейчас
+  async function checkName(n, again) {
+    try {
+      const it = await core.getItem(n.id);
+      if (!it) return;
+      const ch = n.batch.chars.find((c) => c.id === n.charId), from = ch.name, to = SGG.plainText(it.content).slice(0, 60);
+      if (!to || to === from) { if (again) setTimeout(() => checkName(n, false), 1600); return; } // текст мог ещё не сохраниться
+      if (await core.renameChar(n.batch, n.charId, to)) { note('Имя обновлено: ' + from + ' → ' + to); tell({ changed: 'names', batch: n.batch.id }); }
+    } catch (e) { console.error('[SGG bot]', e); diag('имя не обновилось: ' + (e && e.message ? e.message : e)); }
+  }
+  async function onName(items) {
+    try {
+      const one = items && items.length === 1 && items[0].type === 'shape' ? items[0] : null;
+      const prev = lastName;
+      lastName = null;
+      if (one) {
+        for (const b of await batches(false)) {
+          const ch = b.chars.find((c) => b.ui[c.id] && b.ui[c.id].name === one.id);
+          if (ch) { lastName = { batch: b, charId: ch.id, id: one.id }; break; }
+        }
+      }
+      if (prev && !(lastName && lastName.id === prev.id)) setTimeout(() => checkName(prev, true), 400);
+    } catch (e) { console.error('[SGG bot]', e); }
+  }
 
   async function batches(force) {
     if (force || Date.now() - cache.at > 20000) cache = { at: Date.now(), batches: await core.loadBatchesFull() };
@@ -186,5 +216,5 @@
   checkVersion(true);
   setInterval(() => checkVersion(true), 10 * 60 * 1000);
   board.ui.on('items:create', (e) => onImages('items:create', e.items, false));
-  board.ui.on('selection:update', (e) => { onImages('selection', e.items, true); onButton(e.items); });
+  board.ui.on('selection:update', (e) => { onImages('selection', e.items, true); onButton(e.items); onName(e.items); });
 })();
