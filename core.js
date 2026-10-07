@@ -5,10 +5,10 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '0.3.0';
+  const VERSION = '0.3.1';
   const MARK = 'SGG-BOT';
   const COLLECTION = 'sgg-delivery';
-  const FORMAT = 3; // формат батча: 3 = карточки персонажей, дека по порядку готовности
+  const FORMAT = 4; // формат батча: 4 = карточки с назначениями по фазам
 
   // Статусы над персонажем — как на рабочей доске.
   const STATUSES = [
@@ -32,6 +32,13 @@
     { id: 'render', label: 'Render' },
   ];
   const STAGE_COLS = 3; // полоска стадий в два ряда по три
+
+  // Фазы: художника назначают на фазу целиком — скетч или рендер.
+  const PHASES = [
+    { id: 'sketch', label: 'Sketch', stages: ['mood', 'pose', 'design', 'color'] },
+    { id: 'render', label: 'Render', stages: ['mid', 'render'] },
+  ];
+  const phaseOfStage = (stageId) => PHASES.find((p) => p.stages.indexOf(stageId) >= 0) || null;
 
   // Секции Comparison Deck и какие типы доставки в них попадают.
   // В секции у персонажа одно место — там его последний сабмит из этих типов. Места идут по порядку готовности:
@@ -67,12 +74,12 @@
   // Размеры тестового батча (в единицах доски).
   const L = {
     titleH: 60, deckW: 920, deckGap: 60, deckHeaderH: 40, sideGap: 40,
-    cardW: 360, cardGap: 20, tagH: 30, nameH: 34, stageH: 38, stageGap: 4, pvH: 300, fbH: 150, histH: 28, gap: 6,
+    cardW: 360, cardGap: 20, tagH: 30, nameH: 34, asH: 28, stageH: 38, stageGap: 4, pvH: 300, fbH: 150, histH: 28, gap: 6,
     archGap: 3200, archHeadH: 36, archLabelH: 24, archCellH: 160, archCapH: 28,
   };
   const stageRows = () => Math.ceil(STAGES.length / STAGE_COLS);
   const stripHeight = () => stageRows() * L.stageH + (stageRows() - 1) * L.stageGap;
-  const cardHeight = () => L.tagH + L.nameH + stripHeight() + L.pvH + L.fbH + L.histH + L.gap * 5;
+  const cardHeight = () => L.tagH + L.nameH + L.asH + stripHeight() + L.pvH + L.fbH + L.histH + L.gap * 6;
 
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const pad2 = (n) => String(n).padStart(2, '0');
@@ -169,7 +176,7 @@
     return out;
   }
 
-  const emptyChar = () => ({ status: 'todo', artists: {}, cur: null, vers: {}, pv: null, fb: null, deck: {}, arch: [], open: false, shift: 0, cells: [], menu: [] });
+  const emptyChar = () => ({ status: 'todo', assign: {}, cur: null, vers: {}, pv: null, fb: null, deck: {}, arch: [], open: false, shift: 0, cells: [], menu: [] });
 
   // Порядок сдачи: номер сабмита у персонажа; время — запасной ключ для записей без номера.
   const byTime = (a, b) => (a.n || 0) - (b.n || 0) || (a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
@@ -197,18 +204,31 @@
     const s = STATUS_BY_ID[id] || STATUSES[0];
     return { content: para('<strong>' + s.label + '</strong> ▾'), style: Object.assign({}, BASE, { fontSize: 12, fillColor: s.fill, borderColor: s.fill, color: '#1F1F1F' }) };
   };
+  // Ячейка стадии: название и номер последней итерации.
   function stageLook(stage, rec) {
     const order = STAGES.map((s) => s.id);
     const type = TYPE_BY_ID[stage.id];
-    const who = esc(rec.artists[stage.id] || '—');
-    const ver = rec.vers[stage.id] || 0; // сколько итераций уже сдано
+    const ver = rec.vers[stage.id] || 0;
+    const iter = para(ver ? 'v' + ver : '—');
     if (rec.cur === stage.id) {
-      return { content: para('<strong>' + stage.label + '</strong> · v' + ver) + para(who), style: Object.assign({}, BASE, { fillColor: type.color, borderColor: type.color, color: '#FFFFFF' }) };
+      return { content: para('<strong>' + stage.label + '</strong>') + iter, style: Object.assign({}, BASE, { fillColor: type.color, borderColor: type.color, color: '#FFFFFF' }) };
     }
     if (ver > 0 && order.indexOf(stage.id) < order.indexOf(rec.cur)) {
-      return { content: para('<strong>✓ ' + stage.label + '</strong>' + (ver > 1 ? ' · v' + ver : '')) + para(who), style: Object.assign({}, BASE, { fillColor: '#EDEDED', borderColor: '#CFCFCF', color: '#1F1F1F' }) };
+      return { content: para('<strong>✓ ' + stage.label + '</strong>') + iter, style: Object.assign({}, BASE, { fillColor: '#EDEDED', borderColor: '#CFCFCF', color: '#1F1F1F' }) };
     }
-    return { content: para(stage.label + (ver > 0 ? ' · v' + ver : '')) + para(who), style: Object.assign({}, BASE, { fillColor: '#FFFFFF', borderColor: '#D0D0D0', color: '#8C8C8C' }) };
+    return { content: para(stage.label) + iter, style: Object.assign({}, BASE, { fillColor: '#FFFFFF', borderColor: '#D0D0D0', color: '#8C8C8C' }) };
+  }
+  // Плашка назначения: «Sketch: Anna ▾». Пустая — приглашение назначить.
+  function shortName(name) {
+    const p = String(name || '').trim().split(/\s+/);
+    return p.length > 1 && name.length > 14 ? p[0] + ' ' + p[p.length - 1][0].toUpperCase() + '.' : p.join(' ');
+  }
+  function assignLook(phase, rec) {
+    const who = (rec.assign || {})[phase.id];
+    return {
+      content: para(phase.label + ': <strong>' + (who ? esc(shortName(who)) : 'assign') + '</strong> ▾'),
+      style: Object.assign({}, BASE, { fontSize: 11, fillColor: '#FFFFFF', borderColor: who ? '#1F1F1F' : '#D0D0D0', color: who ? '#1F1F1F' : '#8C8C8C' }),
+    };
   }
   const pvLook = (rec) => {
     const t = rec.pv ? TYPE_BY_ID[rec.pv.type] : null;
@@ -246,6 +266,19 @@
       try { return await board.getById(id); } catch (e) { return null; }
     }
 
+    /** Читает много элементов одним запросом; если какого-то уже нет — по одному. → Map id → элемент. */
+    async function getMany(ids) {
+      const list = [...new Set(ids.filter(Boolean))];
+      const out = new Map();
+      if (!list.length) return out;
+      try {
+        for (const it of await board.get({ id: list })) out.set(it.id, it);
+        return out;
+      } catch (e) { /* читаем по одному */ }
+      await Promise.all(list.map(async (id) => { const it = await getItem(id); if (it) out.set(id, it); }));
+      return out;
+    }
+
     async function removeIds(ids) {
       for (const id of ids) {
         const it = await getItem(id);
@@ -278,7 +311,24 @@
     const getBatch = (id) => store.get('b:' + id);
     const saveBatch = (b) => store.set('b:' + b.id, b);
     const charKey = (batchId, charId) => 'c:' + batchId + ':' + charId;
+    const menuKey = (batchId, charId) => 'm:' + batchId + ':' + charId;
     const getChar = async (batchId, charId) => Object.assign(emptyChar(), (await store.get(charKey(batchId, charId))) || {});
+
+    // Команда батча — список имён для назначений. Лежит отдельным ключом, чтобы не перезаписывать сам батч.
+    const teamKey = (batchId) => 'team:' + batchId;
+    const cleanNames = (list) => [...new Set((list || []).map((n) => String(n || '').trim().slice(0, 40)).filter(Boolean))].slice(0, 40);
+    const getTeam = async (batchId) => (await store.get(teamKey(batchId))) || [];
+    async function setTeam(batchId, names) {
+      const list = cleanNames(names);
+      await store.set(teamKey(batchId), list);
+      return list;
+    }
+    async function addToTeam(batchId, name) {
+      const n = String(name || '').trim();
+      const list = await getTeam(batchId);
+      if (!n || list.indexOf(n) >= 0) return list;
+      return setTeam(batchId, list.concat([n]));
+    }
 
     /** Строит тестовый батч: Comparison Deck слева, карточки персонажей справа, под ними место под архив. */
     async function buildTestBatch(opts) {
@@ -338,6 +388,9 @@
         t += L.tagH + L.gap;
         shape(left, t, L.cardW, L.nameH, dark(ch.name, 14), { ref: [ch.id, 'name'] });
         t += L.nameH + L.gap;
+        const asW = (L.cardW - L.stageGap * (PHASES.length - 1)) / PHASES.length;
+        PHASES.forEach((ph, k) => shape(left + k * (asW + L.stageGap), t, asW, L.asH, assignLook(ph, blank), { ref: [ch.id, 'as:' + ph.id] }));
+        t += L.asH + L.gap;
         STAGES.forEach((st, k) => shape(left + (k % STAGE_COLS) * (stageW + L.stageGap), t + Math.floor(k / STAGE_COLS) * (L.stageH + L.stageGap), stageW, L.stageH, stageLook(st, blank), { ref: [ch.id, 'st:' + st.id] }));
         t += stripHeight() + L.gap;
         shape(left, t, L.cardW, L.histH, histLook(blank), { ref: [ch.id, 'hist'] });
@@ -349,7 +402,7 @@
       });
 
       const zones = {}, ui = {}, btn = {}, gen = [];
-      chars.forEach((ch) => { ui[ch.id] = { st: {} }; });
+      chars.forEach((ch) => { ui[ch.id] = { st: {}, as: {} }; });
       let done = 0;
       const createOne = (j) => (j.kind === 'frame' ? board.createFrame(j.props) : board.createShape(j.props));
       try {
@@ -364,8 +417,10 @@
           if (j.zone) zones[j.zone] = it.id;
           if (j.ref) {
             const [cid, part] = j.ref;
-            if (part.indexOf('st:') === 0) ui[cid].st[part.slice(3)] = it.id; else ui[cid][part] = it.id;
-            if (part === 'status' || part === 'hist') btn[it.id] = [cid, part];
+            if (part.indexOf('st:') === 0) ui[cid].st[part.slice(3)] = it.id;
+            else if (part.indexOf('as:') === 0) ui[cid].as[part.slice(3)] = it.id;
+            else ui[cid][part] = it.id;
+            if (part === 'status' || part === 'hist' || part.indexOf('as:') === 0) btn[it.id] = [cid, part];
           }
           gen.push(it.id);
           onProgress(++done, jobs.length);
@@ -374,6 +429,7 @@
 
         const batch = { id, name, v: FORMAT, jiraBase: '', chars, zones, ui, btn };
         await step('запись батча в хранилище доски', () => saveBatch(batch));
+        if (opts && opts.team && opts.team.length) await step('запись команды', () => setTeam(id, opts.team));
         await step('запись списка элементов', () => store.set('gen:' + id, gen));
         const list = (await step('чтение списка батчей', listBatches)).concat([{ id, name, v: FORMAT }]);
         await step('запись списка батчей', () => store.set('batches', list));
@@ -382,7 +438,7 @@
       } catch (e) {
         // Не оставляем на доске половину батча.
         await inChunks(gen.slice(), 8, (gid) => removeIds([gid]));
-        try { await store.remove('b:' + id); await store.remove('gen:' + id); } catch (e2) { /* нечего чистить */ }
+        try { await store.remove('b:' + id); await store.remove('gen:' + id); await store.remove(teamKey(id)); } catch (e2) { /* нечего чистить */ }
         throw e;
       }
     }
@@ -394,6 +450,8 @@
       if (batch && batch.ui) { // карточки персонажей (0.2.0 и новее)
         await Promise.all(DECKS.map((d) => store.remove('deck:' + batchId + ':' + d.key)));
         await inChunks(batch.chars, 8, async (ch) => {
+          const open = await store.get(menuKey(batchId, ch.id));
+          if (open) { ids.push(...open); await store.remove(menuKey(batchId, ch.id)); }
           const rec = await store.get(charKey(batchId, ch.id));
           if (!rec) return;
           for (const e of [rec.pv, rec.fb].concat(rec.arch || [], Object.values(rec.deck || {}))) if (e) ids.push(e.img, e.cap);
@@ -417,81 +475,104 @@
       let done = 0;
       await inChunks(list, 8, async (id) => { await removeIds([id]); if (onProgress) onProgress(++done, list.length); });
       await store.remove('gen:' + batchId);
+      await store.remove(teamKey(batchId));
       await store.remove('b:' + batchId);
       const rest = (await listBatches()).filter((b) => b.id !== batchId);
       await store.set('batches', rest);
     }
 
     // ---------- карточка ----------
-    /** Перерисовывает части карточки под запись персонажа. parts: status, stages, pv, fb, hist. */
+    /** Перерисовывает части карточки под запись персонажа. parts: status, assign (true или id фазы), stages, pv, fb, hist. */
     async function refreshCard(batch, charId, rec, parts) {
       const ui = batch.ui[charId];
-      const upd = async (id, look) => {
-        const it = await getItem(id);
-        if (!it) return;
+      const want = [];
+      if (parts.status) want.push([ui.status, statusLook(rec.status)]);
+      if (parts.assign) for (const ph of PHASES) if (parts.assign === true || parts.assign === ph.id) want.push([ui.as[ph.id], assignLook(ph, rec)]);
+      if (parts.stages) for (const st of STAGES) want.push([ui.st[st.id], stageLook(st, rec)]);
+      if (parts.pv) want.push([ui.pv, pvLook(rec)]);
+      if (parts.fb) want.push([ui.fb, fbLook(rec)]);
+      if (parts.hist) want.push([ui.hist, histLook(rec)]);
+      const got = await getMany(want.map((w) => w[0]));
+      const res = await Promise.allSettled(want.map(([id, look]) => {
+        const it = got.get(id);
+        if (!it) return null;
         it.content = look.content;
         Object.assign(it.style, look.style);
-        await it.sync();
-      };
-      const jobs = [];
-      if (parts.status) jobs.push(upd(ui.status, statusLook(rec.status)));
-      if (parts.stages) for (const st of STAGES) jobs.push(upd(ui.st[st.id], stageLook(st, rec)));
-      if (parts.pv) jobs.push(upd(ui.pv, pvLook(rec)));
-      if (parts.fb) jobs.push(upd(ui.fb, fbLook(rec)));
-      if (parts.hist) jobs.push(upd(ui.hist, histLook(rec)));
-      const res = await Promise.allSettled(jobs);
+        return it.sync();
+      }));
       return res.every((r) => r.status === 'fulfilled');
     }
 
-    async function setStatus(batch, charId, statusId) {
+    /** Перекрашивает плашку. Если элемент уже на руках (по нему только что кликнули), доска заново не читается. */
+    async function paint(id, look, known) {
+      const it = known && known.id === id && typeof known.sync === 'function' ? known : (await getMany([id])).get(id);
+      if (!it) return false;
+      it.content = look.content;
+      if (it.style) Object.assign(it.style, look.style); else it.style = Object.assign({}, look.style);
+      await it.sync();
+      return true;
+    }
+
+    /** Меняет статус. known — сама плашка статуса, если она уже прочитана: тогда цвет меняется сразу, без чтения доски. */
+    async function setStatus(batch, charId, statusId, known) {
       if (!STATUS_BY_ID[statusId]) throw new Error('Нет такого статуса.');
-      const rec = await getChar(batch.id, charId);
-      rec.status = statusId;
-      await store.set(charKey(batch.id, charId), rec);
-      await refreshCard(batch, charId, rec, { status: true });
+      const [rec] = await Promise.all([
+        getChar(batch.id, charId).then(async (r) => { r.status = statusId; await store.set(charKey(batch.id, charId), r); return r; }),
+        paint(batch.ui[charId].status, statusLook(statusId), known).catch(() => false),
+      ]);
+      return rec;
+    }
+
+    /** Назначает художника на фазу (sketch или render). Пустое имя снимает назначение. */
+    async function setAssign(batch, charId, phaseId, name, known) {
+      const phase = PHASES.find((p) => p.id === phaseId);
+      if (!phase) throw new Error('Нет такой фазы.');
+      const who = String(name || '').trim().slice(0, 40);
+      const [rec] = await Promise.all([
+        getChar(batch.id, charId).then(async (r) => { r.assign = r.assign || {}; r.assign[phaseId] = who; await store.set(charKey(batch.id, charId), r); return r; }),
+        paint(batch.ui[charId].as[phaseId], assignLook(phase, { assign: { [phaseId]: who } }), known).catch(() => false),
+        addToTeam(batch.id, who).catch(() => null),
+      ]);
       return rec;
     }
 
     /**
-     * Выпадающий список статусов прямо на доске: семь плашек под статусом персонажа.
-     * Возвращает { idПлашки: idСтатуса }. Плашки временные, их убирает closeStatusMenu.
+     * Выпадающий список прямо на доске: плашки под элементом anchor (плашка статуса или назначения).
+     * options: [{ value, label, fill?, mark? }] → { map: { idПлашки: value }, items }. Плашки временные, их убирает closeMenu.
      */
-    async function openStatusMenu(batch, charId) {
-      const rec = await getChar(batch.id, charId);
-      if (rec.menu && rec.menu.length) await Promise.all(rec.menu.map((id) => removeIds([id]))); // осталось от прошлого раза
-      const tag = await zoneOf(batch.ui[charId].status, 'статус');
-      const r = tag.rect, top = r.y + r.h / 2 + 2;
-      const made = await Promise.all(STATUSES.map((st, i) => board.createShape({
-        shape: 'rectangle', content: para('<strong>' + (st.id === rec.status ? '✓ ' : '') + st.label + '</strong>'),
-        x: r.x, y: top + i * r.h + r.h / 2, width: r.w, height: r.h,
-        style: Object.assign({}, BASE, { fontSize: 12, fillColor: st.fill, borderColor: st.id === rec.status ? '#1F1F1F' : '#FFFFFF', borderWidth: 2, color: '#1F1F1F' }),
-      })));
+    async function openMenu(batch, charId, anchor, options) {
+      const tag = typeof anchor === 'string' ? await getItem(anchor) : anchor;
+      if (!tag) throw new Error('Элемент карточки не найден на доске.');
+      const r = (await absRect(tag)).rect;
+      const [left, made] = await Promise.all([
+        store.get(menuKey(batch.id, charId)),
+        Promise.all(options.map((o, i) => board.createShape({
+          shape: 'rectangle', content: para('<strong>' + (o.mark ? '✓ ' : '') + esc(o.label) + '</strong>'),
+          x: r.x, y: r.y + r.h / 2 + i * r.h + r.h / 2, width: r.w, height: r.h,
+          style: Object.assign({}, BASE, { fontSize: r.w < 250 ? 11 : 12, fillColor: o.fill || '#FFFFFF', borderColor: o.mark ? '#1F1F1F' : '#C9C9C9', borderWidth: o.mark ? 2 : 1, color: '#1F1F1F' }),
+        }))),
+      ]);
       const map = {};
-      made.forEach((it, i) => { map[it.id] = STATUSES[i].id; });
-      rec.menu = made.map((it) => it.id);
-      await store.set(charKey(batch.id, charId), rec);
-      try { await board.bringToFront(made); } catch (e) { /* порядок слоёв не критичен */ }
-      return map;
+      made.forEach((it, i) => { map[it.id] = options[i].value; });
+      // Запоминаем плашки, чтобы убрать их, даже если вкладку закрыли с открытым списком; заодно убираем забытые.
+      await Promise.all([store.set(menuKey(batch.id, charId), made.map((it) => it.id))].concat((left || []).map((id) => removeIds([id]))));
+      return { map, items: made };
     }
 
-    /** Убирает список статусов; если выбран статус — ставит его. */
-    async function closeStatusMenu(batch, charId, pick) {
-      const rec = await getChar(batch.id, charId);
-      const ids = rec.menu || [];
-      const changed = !!STATUS_BY_ID[pick] && rec.status !== pick;
-      rec.menu = [];
-      if (changed) rec.status = pick;
-      await Promise.all([store.set(charKey(batch.id, charId), rec)].concat(ids.map((id) => removeIds([id]))));
-      if (changed) await refreshCard(batch, charId, rec, { status: true });
-      return { rec, changed };
+    async function closeMenu(batch, charId, items) {
+      await Promise.allSettled((items || []).map((it) => board.remove(it)).concat([store.remove(menuKey(batch.id, charId))]));
     }
 
-    async function setArtists(batch, charId, artists) {
-      const rec = await getChar(batch.id, charId);
-      for (const st of STAGES) if (artists[st.id] != null) rec.artists[st.id] = String(artists[st.id]).trim().slice(0, 40);
-      await store.set(charKey(batch.id, charId), rec);
-      await refreshCard(batch, charId, rec, { stages: true });
-      return rec;
+    const statusOptions = (current) => STATUSES.map((st) => ({ value: st.id, label: st.label, fill: st.fill, mark: st.id === current }));
+
+    /** Варианты для списка назначения: сначала «я», потом команда и те, кто сейчас на доске, в конце — снять назначение. */
+    function assignOptions(team, current, me, online) {
+      const names = [];
+      for (const n of [me].concat(team || [], online || [])) if (n && names.indexOf(n) < 0) names.push(n);
+      if (current && names.indexOf(current) < 0) names.push(current);
+      const out = names.slice(0, 14).map((n) => ({ value: n, label: n === me ? 'Me · ' + n : n, mark: n === current }));
+      if (current) out.push({ value: '', label: '— Unassign', fill: '#F2F2F2' });
+      return out;
     }
 
     // ---------- раскладка ----------
@@ -559,55 +640,70 @@
     }
     const moveToArchive = (arRect, index, entry) => moveInto(archiveSlot(arRect, index), entry);
 
-    /** Сдвигает элементы по вертикали. */
-    async function moveBy(ids, dy) {
-      await Promise.allSettled(ids.filter(Boolean).map(async (id) => {
-        const it = await getItem(id);
-        if (!it) return;
-        it.y += dy;
-        await it.sync();
-      }));
+    /** Ставит уже прочитанные картинку и подпись в прямоугольник box; возвращает запущенные обновления. */
+    function placeInto(got, box, entry) {
+      const areaH = box.h - box.capH, img = got.get(entry.img), cap = got.get(entry.cap), out = [];
+      if (img) {
+        const side = fitSide(img.width / img.height, box.w, areaH);
+        if (side.width) img.width = side.width; else img.height = side.height;
+        img.x = box.left + box.w / 2;
+        img.y = box.top + areaH / 2;
+        out.push(img.sync());
+      }
+      if (cap) {
+        cap.width = box.w;
+        cap.x = box.left + box.w / 2;
+        cap.y = box.top + areaH + box.capH / 2;
+        out.push(cap.sync());
+      }
+      return out;
     }
 
     /**
      * Раскрывает или сворачивает историю прямо в карточке.
-     * Раскрыто: под полоской стадий идут все прошлые сабмиты по порядку сдачи, текущая картинка — ниже них.
-     * Свёрнуто: в карточке только текущая, прошлые лежат в хранилище. Файлы не перезагружаются, элементы только двигаются.
+     * Раскрыто: под кнопкой History идут все прошлые сабмиты по порядку сдачи, текущий — ниже них.
+     * Свёрнуто: в карточке только текущий, прошлые лежат в хранилище.
+     * Файлы не перезагружаются: всё читается одним запросом, дальше элементы только двигаются, все разом.
      */
-    async function setHistory(batch, charId, open) {
-      const rec = await getChar(batch.id, charId);
+    async function setHistory(batch, charId, open, known) {
+      const rec = known || (await getChar(batch.id, charId));
       const ui = batch.ui[charId];
-      if (!!rec.open === !!open) return { open: !!rec.open, count: rec.arch.length, rec };
-      const current = [ui.pv, rec.pv && rec.pv.img, rec.pv && rec.pv.cap, ui.fb, rec.fb && rec.fb.img, rec.fb && rec.fb.cap];
+      if (!!rec.open === !!open) return { open: !!rec.open, count: rec.arch.length, rec, focus: [] };
+      const past = pastSubmits(rec);
+      if (open && !past.length) return { open: false, count: 0, rec, focus: [] };
+      const current = [ui.pv, rec.pv && rec.pv.img, rec.pv && rec.pv.cap, ui.fb, rec.fb && rec.fb.img, rec.fb && rec.fb.cap].filter(Boolean);
+      const got = await getMany(current.concat(...rec.arch.map((e) => [e.img, e.cap]), [ui.hist, ui.ar], rec.cells || []));
+      const jobs = [];
+      const shiftCurrent = (dy) => current.forEach((id) => { const it = got.get(id); if (it) { it.y += dy; jobs.push(it.sync()); } });
       if (open) {
-        const past = pastSubmits(rec);
-        if (!past.length) return { open: false, count: 0, rec };
-        const pv = await zoneOf(ui.pv, 'превью');
-        const r = pv.rect, stepY = r.h + L.gap, shift = past.length * stepY, top0 = r.y - r.h / 2, pad = 8;
-        // Рамки под прошлые сабмиты, цвет рамки — цвет стадии.
-        const cells = await Promise.all(past.map((e, i) => board.createShape({
-          shape: 'rectangle', content: '', x: r.x, y: top0 + i * stepY + r.h / 2, width: r.w, height: r.h,
-          style: Object.assign({}, BASE, { fillColor: (TYPE_BY_ID[e.type] || {}).tint || '#FFFFFF', borderColor: (TYPE_BY_ID[e.type] || {}).color || '#D0D0D0', borderWidth: 2 }),
-        })));
-        const moved = await Promise.all([moveBy(current, shift)].concat(past.map((e, i) => moveInto({ left: r.x - r.w / 2 + pad, top: top0 + i * stepY + pad, w: r.w - pad * 2, h: r.h - pad * 2, capH: 30 }, e))));
-        const onTop = [].concat(...moved.slice(1));
-        if (onTop.length) { try { await board.bringToFront(onTop); } catch (e) { /* порядок слоёв не критичен */ } }
-        rec.open = true; rec.shift = shift; rec.cells = cells.map((c) => c.id);
+        const pv = got.get(ui.pv);
+        if (!pv) throw new Error('Превью персонажа не найдено на доске — похоже, его удалили.');
+        const stepY = pv.height + L.gap, shift = past.length * stepY, top0 = pv.y - pv.height / 2, pad = 8;
+        const box0 = { left: pv.x - pv.width / 2 + pad, w: pv.width - pad * 2, h: pv.height - pad * 2, capH: 30 };
+        shiftCurrent(shift);
+        past.forEach((e, i) => jobs.push(...placeInto(got, Object.assign({ top: top0 + i * stepY + pad }, box0), e)));
+        rec.open = true; rec.shift = shift;
       } else {
-        const ar = await zoneOf(ui.ar, 'хранилище');
-        await Promise.all([removeIds(rec.cells || []), moveBy(current, -(rec.shift || 0))].concat(rec.arch.map((e, i) => moveToArchive(ar.rect, i, e))));
+        const ar = got.get(ui.ar);
+        if (!ar) throw new Error('Хранилище прошлых сабмитов не найдено на доске — похоже, его удалили.');
+        const arRect = { x: ar.x, y: ar.y, w: ar.width, h: ar.height };
+        shiftCurrent(-(rec.shift || 0));
+        rec.arch.forEach((e, i) => jobs.push(...placeInto(got, archiveSlot(arRect, i), e)));
+        (rec.cells || []).forEach((id) => { const it = got.get(id); if (it) jobs.push(board.remove(it)); }); // рамки из версий до 0.3.1
         rec.open = false; rec.shift = 0; rec.cells = [];
       }
-      await store.set(charKey(batch.id, charId), rec);
-      await refreshCard(batch, charId, rec, { hist: true });
-      return { open: rec.open, count: rec.arch.length, rec };
+      const hist = got.get(ui.hist);
+      if (hist) { const look = histLook(rec); hist.content = look.content; Object.assign(hist.style, look.style); jobs.push(hist.sync()); }
+      jobs.push(store.set(charKey(batch.id, charId), rec));
+      await Promise.allSettled(jobs);
+      return { open: rec.open, count: rec.arch.length, rec, focus: [hist, got.get(ui.fb)].filter(Boolean) };
     }
 
-    const toggleHistory = async (batch, charId) => setHistory(batch, charId, !(await getChar(batch.id, charId)).open);
+    const toggleHistory = async (batch, charId) => { const rec = await getChar(batch.id, charId); return setHistory(batch, charId, !rec.open, rec); };
 
     async function collapseAll(batch) {
       let n = 0;
-      await inChunks(batch.chars, 4, async (ch) => { if ((await getChar(batch.id, ch.id)).open) { await setHistory(batch, ch.id, false); n++; } });
+      await inChunks(batch.chars, 4, async (ch) => { const rec = await getChar(batch.id, ch.id); if (rec.open) { await setHistory(batch, ch.id, false, rec); n++; } });
       return n;
     }
 
@@ -627,10 +723,11 @@
       const deck = type.deck ? DECK_BY_KEY[type.deck] : null;
 
       // Раскрытую историю сначала сворачиваем: новая картинка встаёт в обычную карточку.
-      if ((await getChar(batch.id, ch.id)).open) await setHistory(batch, ch.id, false);
+      const before = await getChar(batch.id, ch.id);
+      if (before.open) await setHistory(batch, ch.id, false, before);
       // Реестр и зоны читаем разом. Если зоны нет, на доске ничего не меняется.
       const [rec, zone, arZone, deckZone, deckIdx] = await Promise.all([
-        getChar(batch.id, ch.id),
+        before.open ? getChar(batch.id, ch.id) : Promise.resolve(before),
         zoneOf(isFb ? ui.fb : ui.pv, ch.name + (isFb ? ' → Feedback' : ' → превью')),
         zoneOf(ui.ar, ch.name + ' → архив'),
         deck ? zoneOf(batch.zones['deck:' + deck.key], deck.title) : Promise.resolve(null),
@@ -687,7 +784,12 @@
         if (redo) stale.push(rec.pv.img, rec.pv.cap); else rec.fb = null; // перезалив: старый файл убираем, фидбек к этой итерации остаётся
         rec.pv = mine;
         rec.vers[type.id] = v;
-        if (type.stage) { rec.cur = type.stage; if (by) rec.artists[type.stage] = by; }
+        if (type.stage) {
+          rec.cur = type.stage;
+          const ph = phaseOfStage(type.stage); // кто сдал первым, тот и назначен на фазу, если её никто не взял
+          rec.assign = rec.assign || {};
+          if (ph && by && !rec.assign[ph.id]) rec.assign[ph.id] = by;
+        }
         if (d) {
           if (rec.deck[deck.key]) stale.push(rec.deck[deck.key].img, rec.deck[deck.key].cap); // в секции остаётся только последний сабмит
           rec.deck[deck.key] = { img: d.img, cap: d.cap, type: type.id };
@@ -699,8 +801,9 @@
 
       const tail = moves.concat([store.set(charKey(batch.id, ch.id), rec)], stale.map((id) => removeIds([id])));
       if (opts.sourceItemId) tail.push(removeIds([opts.sourceItemId]));
-      await Promise.all(tail);
-      const drawnOk = await refreshCard(batch, ch.id, rec, { status: true, stages: !isFb, pv: !isFb, fb: true, hist: true });
+      if (by) tail.push(addToTeam(batch.id, by).catch(() => null)); // кто доставляет, тот появляется в списке команды
+      // Реестр, архив и оформление карточки обновляются одновременно.
+      const drawnOk = (await Promise.all([refreshCard(batch, ch.id, rec, { status: true, assign: !isFb, stages: !isFb, pv: !isFb, fb: true, hist: true })].concat(tail)))[0];
       if (!drawnOk) warnings.push('Картинка на месте, но оформление карточки обновилось не полностью.');
       return {
         v, isFeedback: isFb, replaced: redo, title: entryTitle(entry), cardImageId: card.img, deckTitle: deck ? deck.title : null,
@@ -733,18 +836,18 @@
       return out;
     }
 
-    /** → { charId, typeId|null, group|null }: бросили на стадию — знаем тип, на блок фидбека — знаем, что это фидбек. */
+    /**
+     * Куда бросили картинку → { charId, typeId|null, group|null } или null.
+     * Срабатывает, только если точка попала в саму карточку: на ячейку стадии, на превью или на блок фидбека.
+     */
     function guessTarget(rects, pt) {
-      let charOnly = null;
       for (const k of Object.keys(rects)) {
         const r = rects[k], p = k.split(':');
-        if (pt.x < r.x - r.w / 2 || pt.x > r.x + r.w / 2) continue;
-        if (p[1] !== 'st') charOnly = charOnly || { charId: p[0], typeId: null, group: null };
-        if (pt.y < r.y - r.h / 2 || pt.y > r.y + r.h / 2) continue;
+        if (pt.x < r.x - r.w / 2 || pt.x > r.x + r.w / 2 || pt.y < r.y - r.h / 2 || pt.y > r.y + r.h / 2) continue;
         if (p[1] === 'st') return { charId: p[0], typeId: p[2], group: null };
         return { charId: p[0], typeId: null, group: p[1] === 'fb' ? 'fb' : null };
       }
-      return charOnly;
+      return null;
     }
 
     /** Кнопка бота на доске (плашка статуса или History) → { batch, charId, action }. */
@@ -763,13 +866,13 @@
     }
 
     return {
-      store, listBatches, getBatch, saveBatch, getChar, buildTestBatch, deleteBatch, place, setStatus, setArtists,
-      refreshCard, openStatusMenu, closeStatusMenu, setHistory, toggleHistory, collapseAll, zoomToArchive, absRect, getItem, loadZoneRects, guessTarget, findButton, loadBatchesFull,
+      store, listBatches, getBatch, saveBatch, getChar, getTeam, setTeam, addToTeam, buildTestBatch, deleteBatch, place, setStatus, setAssign,
+      refreshCard, openMenu, closeMenu, statusOptions, assignOptions, setHistory, toggleHistory, collapseAll, zoomToArchive, absRect, getItem, loadZoneRects, guessTarget, findButton, loadBatchesFull,
     };
   }
 
   return {
-    VERSION, MARK, FORMAT, STATUSES, STATUS_BY_ID, STAGES, STAGE_COLS, TYPES, TYPE_BY_ID, DECKS, DECK_BY_KEY, DEFAULT_CHARACTERS, L,
-    create, pickImages, isBotImage, normalizeJira, deckGrid, deckSlot, archiveSlot, fitSide, timeline, pastSubmits, entryTitle, esc, ddmm,
+    VERSION, MARK, FORMAT, STATUSES, STATUS_BY_ID, STAGES, STAGE_COLS, PHASES, TYPES, TYPE_BY_ID, DECKS, DECK_BY_KEY, DEFAULT_CHARACTERS, L,
+    create, pickImages, isBotImage, normalizeJira, shortName, phaseOfStage, deckGrid, deckSlot, archiveSlot, fitSide, timeline, pastSubmits, entryTitle, esc, ddmm,
   };
 });

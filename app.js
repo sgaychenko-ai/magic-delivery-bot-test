@@ -4,15 +4,23 @@
   const board = miro.board;
   const core = SGG.create(miro);
   const seen = new Set(); // картинки, про которые бот уже спрашивал
-  let myId; // undefined = ещё не спрашивали, null = узнать не удалось
+  let user; // undefined = ещё не спрашивали
   const busy = new Set();
   let cache = { at: 0, batches: [] }; // батчи с картой кнопок, чтобы не читать хранилище на каждый клик
+  let online = { at: 0, names: [] };
+  const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
-  async function me() {
-    if (myId === undefined) {
-      try { myId = (await board.getUserInfo()).id; } catch (e) { myId = null; }
+  async function me(fresh) {
+    if (fresh || user === undefined) {
+      try { const u = await board.getUserInfo(); user = { id: u.id, name: u.name || '' }; } catch (e) { user = { id: null, name: '' }; }
     }
-    return myId;
+    return user;
+  }
+  async function onlineNames() {
+    if (Date.now() - online.at > 30000) {
+      try { online = { at: Date.now(), names: (await board.getOnlineUsers()).map((u) => u.name).filter(Boolean) }; } catch (e) { online = { at: Date.now(), names: [] }; }
+    }
+    return online.names;
   }
 
   const diagOn = () => { try { return localStorage.getItem('sgg:diag') !== '0'; } catch (e) { return true; } };
@@ -20,6 +28,8 @@
     try { await board.notifications.showInfo(String(text).slice(0, 78)); } catch (e) { /* подсказка не критична */ }
   }
   const diag = (text) => (diagOn() ? note('Bot: ' + text) : null);
+  // С включённой диагностикой бот дописывает, сколько секунд заняло действие, — так видно, где доска отвечает медленно.
+  const secs = (t0) => (diagOn() ? ' · ' + ((Date.now() - t0) / 1000).toFixed(1) + ' с' : '');
 
   async function openPanel(data) {
     if (!(await board.ui.canOpenPanel())) return false;
@@ -37,7 +47,7 @@
     try {
       const all = items || [];
       if (!all.some((i) => i.type === 'image')) return;
-      const res = SGG.pickImages(all, { uid: await me(), seen, requireFresh, now: Date.now() });
+      const res = SGG.pickImages(all, { uid: (await me()).id, seen, requireFresh, now: Date.now() });
       if (!res.take.length) {
         const loud = res.why.filter((w) => w !== 'картинка бота' && w !== 'уже видел' && w !== 'старая');
         if (loud.length) diag(source + ': пропуск — ' + res.why.join(', '));
@@ -52,49 +62,80 @@
     }
   }
 
-  // Кнопки на доске. Плашка статуса раскрывает список статусов прямо под собой; History раскрывает или сворачивает историю.
-  let menu = null; // открытый список статусов: { batch, charId, map, at, tagId, timer }
+  // Кнопки на доске. Плашка статуса и плашки Sketch / Render раскрывают список прямо под собой; History раскрывает историю.
+  let menu = null; // открытый список: { batch, charId, phase|null, current, map, items, at, anchor, anchorId, timer }
 
-  async function closeMenu(pick) {
+  async function closeMenu(pick) { // pick === null — закрыли, ничего не выбрав
     const m = menu;
     if (!m) return;
     menu = null;
     clearTimeout(m.timer);
-    const res = await core.closeStatusMenu(m.batch, m.charId, pick);
-    if (res.changed) note(m.batch.chars.find((c) => c.id === m.charId).name + ' → ' + SGG.STATUS_BY_ID[pick].label);
+    const jobs = [core.closeMenu(m.batch, m.charId, m.items)];
+    const name = m.batch.chars.find((c) => c.id === m.charId).name, t0 = Date.now();
+    let done = '';
+    if (pick !== null && pick !== m.current) { // список убирается и карточка перекрашивается одновременно
+      if (m.phase) {
+        jobs.push(core.setAssign(m.batch, m.charId, m.phase, pick, m.anchor));
+        done = name + ' · ' + SGG.PHASES.find((p) => p.id === m.phase).label + ' → ' + (pick || 'никто');
+      } else {
+        jobs.push(core.setStatus(m.batch, m.charId, pick, m.anchor));
+        done = name + ' → ' + SGG.STATUS_BY_ID[pick].label;
+      }
+    }
+    await Promise.all(jobs);
+    if (done) note(done + secs(t0));
+  }
+
+  async function openMenuFor(hit, anchor) {
+    const phase = hit.action.indexOf('as:') === 0 ? hit.action.slice(3) : null;
+    let current, options;
+    if (phase) {
+      const got = await Promise.all([core.getChar(hit.batch.id, hit.charId), core.getTeam(hit.batch.id), me(true), onlineNames()]);
+      current = (got[0].assign || {})[phase] || '';
+      options = core.assignOptions(got[1], current, got[2].name, got[3]);
+      if (!options.length) { note('Некого выбрать: добавь имена в панели бота → Команда'); return; }
+    } else {
+      current = (await core.getChar(hit.batch.id, hit.charId)).status;
+      options = core.statusOptions(current);
+    }
+    const res = await core.openMenu(hit.batch, hit.charId, anchor, options);
+    menu = { batch: hit.batch, charId: hit.charId, phase, current, map: res.map, items: res.items, at: Date.now(), anchor, anchorId: anchor.id, timer: setTimeout(() => closeMenu(null).catch(() => {}), 20000) };
+  }
+
+  async function onHistory(hit) {
+    const t0 = Date.now();
+    const res = await core.toggleHistory(hit.batch, hit.charId);
+    if (!res.count) { note('У этого персонажа пока нет прошлых сабмитов'); return; }
+    if (diagOn()) note((res.open ? 'История раскрыта' : 'История свёрнута') + secs(t0));
+    if (!res.open || res.focus.length < 2) return;
+    // Экран двигаем, только если раскрытая карточка не помещается.
+    try {
+      const vp = await board.viewport.get();
+      const top = Math.min(...res.focus.map((i) => i.y - i.height / 2)), bottom = Math.max(...res.focus.map((i) => i.y + i.height / 2));
+      if (top < vp.y || bottom > vp.y + vp.height) await board.viewport.zoomTo(res.focus);
+    } catch (e) { /* не критично */ }
   }
 
   async function onButton(items) {
     try {
       const one = items && items.length === 1 && items[0].type === 'shape' ? items[0] : null;
       if (menu) {
-        if (one && menu.map[one.id]) { await closeMenu(menu.map[one.id]); return; } // выбрали статус из списка
+        if (one && has(menu.map, one.id)) { await closeMenu(menu.map[one.id]); return; } // выбрали строку списка
         const fresh = Date.now() - menu.at < 500; // сразу после открытия Miro шлёт пустое выделение — не закрываемся
-        if (!fresh && !(one && one.id === menu.tagId)) await closeMenu(null); // кликнули мимо списка
+        if (!fresh && !(one && one.id === menu.anchorId)) await closeMenu(null); // кликнули мимо списка
       }
       if (!one) return;
       const hit = core.findButton(await batches(false), one.id);
       if (!hit) return;
-      try { await board.deselect({ id: one.id }); } catch (e) { /* не критично */ }
+      try { const p = board.deselect({ id: one.id }); if (p && p.catch) p.catch(() => {}); } catch (e) { /* рамку выделения снимаем, не дожидаясь ответа */ }
       const key = hit.batch.id + ':' + hit.charId + ':' + hit.action;
       if (busy.has(key)) return; // второе нажатие, пока первое ещё выполняется
       busy.add(key);
       try {
-        if (hit.action === 'status') {
-          const same = menu && menu.batch.id === hit.batch.id && menu.charId === hit.charId;
-          if (menu) await closeMenu(null);
-          if (same) return; // повторный клик по плашке закрывает список
-          const map = await core.openStatusMenu(hit.batch, hit.charId);
-          menu = { batch: hit.batch, charId: hit.charId, map, at: Date.now(), tagId: one.id, timer: setTimeout(() => closeMenu(null).catch(() => {}), 20000) };
-          return;
-        }
-        const res = await core.toggleHistory(hit.batch, hit.charId);
-        if (!res.count) note('У этого персонажа пока нет прошлых сабмитов');
-        else if (res.open) {
-          const ui = hit.batch.ui[hit.charId];
-          const ends = (await Promise.all([core.getItem(ui.status), core.getItem(ui.fb)])).filter(Boolean);
-          if (ends.length) await board.viewport.zoomTo(ends);
-        }
+        if (hit.action === 'hist') { await onHistory(hit); return; }
+        const same = menu && menu.anchorId === one.id;
+        if (menu) await closeMenu(null);
+        if (!same) await openMenuFor(hit, one); // повторный клик по той же плашке просто закрывает список
       } finally { busy.delete(key); }
     } catch (e) {
       console.error('[SGG bot]', e);

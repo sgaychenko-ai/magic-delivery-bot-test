@@ -12,6 +12,7 @@
     <nav id="tabs" class="tabs" hidden>
       <button type="button" data-view="Delivery">Доставка</button>
       <button type="button" data-view="Char">Персонаж</button>
+      <button type="button" data-view="Team">Команда</button>
       <button type="button" data-view="Setup">Батч</button>
     </nav>
     <select id="batchSelect" class="batch-select" aria-label="Батч" hidden></select>
@@ -57,6 +58,7 @@
         <span>Персонаж</span>
         <select id="charSelect"></select>
       </label>
+      <p id="guessNote" class="guess small" hidden></p>
 
       <div class="field">
         <span>Стадия</span>
@@ -109,14 +111,28 @@
       </label>
       <div class="field">
         <span>Кто делает</span>
-        <div id="artists" class="artists"></div>
-        <datalist id="people"></datalist>
+        <div id="assignRows" class="artists"></div>
       </div>
-      <button id="saveArtists" class="secondary" type="button">Сохранить исполнителей</button>
       <hr />
       <h2>История</h2>
       <div id="timeline" class="timeline"></div>
       <button id="showArchive" class="secondary" type="button">Раскрыть историю на доске</button>
+    </section>
+
+    <!-- Команда: кто на какой фазе -->
+    <section id="viewTeam" class="view" hidden>
+      <h2>Кто что делает</h2>
+      <p class="muted small">Выбери художника — имя сразу появится на карточке. То же самое можно сделать на доске: клик по плашке Sketch или Render.</p>
+      <div id="teamTable" class="team-table"></div>
+      <hr />
+      <label class="field">
+        <span>Команда батча — по одному имени в строке</span>
+        <textarea id="teamNames" rows="5" placeholder="Anna&#10;Boris"></textarea>
+      </label>
+      <div class="row-links">
+        <button id="teamOnline" class="link" type="button">Добавить тех, кто сейчас на доске</button>
+      </div>
+      <button id="saveTeam" class="secondary" type="button">Сохранить команду</button>
     </section>
 
     <!-- Настройки батча -->

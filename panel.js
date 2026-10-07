@@ -1,4 +1,4 @@
-/* Панель бота: доставка картинок, статус и исполнители персонажа, настройки батча. */
+/* Панель бота: доставка картинок, статус и история персонажа, кто на какой фазе, настройки батча. */
 (async function () {
   'use strict';
   const board = miro.board;
@@ -10,6 +10,9 @@
     queue: [], current: null, loading: false,
     charId: null, typeId: null, rec: null,
     user: { id: null, name: '' }, busy: false, view: 'Empty', online: [],
+    team: [], recs: {},
+    touched: { char: false, type: false }, // что человек выбрал сам для текущей картинки — это бот не трогает
+    hint: '',
   };
   const seen = new Set(); // картинки, про которые бот уже спрашивал
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -35,7 +38,7 @@
 
   function showView(name) {
     state.view = name;
-    for (const v of ['Empty', 'Delivery', 'Char', 'Setup']) $('view' + v).hidden = v !== name;
+    for (const v of ['Empty', 'Delivery', 'Char', 'Team', 'Setup']) $('view' + v).hidden = v !== name;
     $('tabs').hidden = name === 'Empty';
     document.querySelectorAll('#tabs button').forEach((b) => b.setAttribute('aria-current', String(b.dataset.view === name)));
     $('batchSelect').hidden = name === 'Empty' || state.full.length < 2;
@@ -135,9 +138,12 @@
       }
       const ready = await prepare(raw);
       state.current = { kind: next.kind, id: next.id || null, dataUrl: ready.dataUrl, deckDataUrl: ready.deckDataUrl, natural: ready.natural, took: (performance.now() - t0) / 1000 };
+      // Догадка по месту, куда бросили, приходит с задержкой. Если человек уже выбрал сам — его выбор главнее.
       if (guess) {
-        state.charId = guess.charId;
-        if (guess.typeId) state.typeId = guess.typeId;
+        const took = [];
+        if (!state.touched.char && guess.charId) { state.charId = guess.charId; took.push((state.batch.chars.find((c) => c.id === guess.charId) || {}).name); }
+        if (!state.touched.type && guess.typeId) { state.typeId = guess.typeId; took.push(SGG.TYPE_BY_ID[guess.typeId].label); }
+        state.hint = took.length ? 'Выбрал по месту, куда бросили: ' + took.join(' · ') + '. Можно поменять.' : '';
       }
     } catch (e) {
       fail('Не получилось взять картинку', e);
@@ -150,6 +156,8 @@
   function finishCurrent() {
     state.current = null;
     state.typeId = null;
+    state.touched = { char: false, type: false };
+    state.hint = '';
     pump();
   }
 
@@ -176,6 +184,9 @@
     state.batch = state.full.find((b) => b.id === id) || (await core.getBatch(id));
     state.rects = null;
     state.rectsP = core.loadZoneRects(state.batch).then((r) => { state.rects = r; return r; }).catch(() => null);
+    state.recs = {};
+    try { state.team = await core.getTeam(id); } catch (e) { state.team = []; }
+    $('teamNames').value = state.team.join('\n');
     $('batchSelect').value = id;
     remember('batch', id);
     for (const sid of ['charSelect', 'charSelect2']) {
@@ -191,12 +202,19 @@
     await loadChar();
   }
 
+  let charLoad = 0;
   async function loadChar() {
+    const my = ++charLoad; // если персонажа сменили, пока читалась запись, старый ответ не должен затереть новый
+    const id = state.charId;
+    let rec = null;
     state.rec = null;
-    if (state.batch && state.charId) {
-      try { state.rec = await core.getChar(state.batch.id, state.charId); } catch (e) { fail('Не прочитал карточку персонажа', e); }
+    if (state.batch && id) {
+      try { rec = await core.getChar(state.batch.id, id); } catch (e) { fail('Не прочитал карточку персонажа', e); }
     }
-    fillArtists();
+    if (my !== charLoad) return;
+    state.rec = rec;
+    if (rec) state.recs[id] = rec;
+    fillAssign();
     render();
   }
 
@@ -210,7 +228,7 @@
       b.textContent = t.label;
       b.style.setProperty('--chip', t.color);
       b.setAttribute('aria-pressed', 'false');
-      b.addEventListener('click', () => { state.typeId = t.id; if (t.primary && state.rec) $('jira').value = state.rec.jiraInput || ''; setIter('new'); render(); });
+      b.addEventListener('click', () => { state.typeId = t.id; state.touched.type = true; state.hint = ''; if (t.primary && state.rec) $('jira').value = state.rec.jiraInput || ''; setIter('new'); render(); });
       $('types-' + t.group).append(b);
     }
     $('statusAfter').add(new Option('Авто', ''));
@@ -218,32 +236,94 @@
       $('statusAfter').add(new Option(s.label, s.id));
       $('statusSelect').add(new Option(s.label, s.id));
     }
-    for (const st of SGG.STAGES) {
+    for (const ph of SGG.PHASES) {
       const row = document.createElement('label');
       row.className = 'artist';
-      const dot = document.createElement('i');
-      dot.className = 'dot';
-      dot.style.background = SGG.TYPE_BY_ID[st.id].color;
       const name = document.createElement('span');
-      name.textContent = st.label;
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.id = 'artist-' + st.id;
-      input.setAttribute('list', 'people');
-      input.placeholder = 'имя художника';
-      row.append(dot, name, input);
-      $('artists').append(row);
+      name.textContent = ph.label;
+      const sel = document.createElement('select');
+      sel.id = 'assign-' + ph.id;
+      sel.addEventListener('change', (e) => applyAssign(state.charId, ph.id, e.target.value));
+      row.append(name, sel);
+      $('assignRows').append(row);
     }
   }
 
   const setIter = (v) => { document.querySelector('input[name="iter"][value="' + v + '"]').checked = true; };
   const iterMode = () => document.querySelector('input[name="iter"]:checked').value;
 
-  function fillArtists() {
-    for (const st of SGG.STAGES) $('artist-' + st.id).value = (state.rec && state.rec.artists[st.id]) || '';
-    const names = new Set(state.online.concat(state.user.name ? [state.user.name] : [], state.rec ? Object.values(state.rec.artists) : []).filter(Boolean));
-    $('people').innerHTML = '';
-    for (const n of names) { const o = document.createElement('option'); o.value = n; $('people').append(o); }
+  // ---------- кто на какой фазе ----------
+  /** Список имён в выпадающем поле: сначала «я», потом команда и те, кто сейчас на доске. */
+  function fillPeople(sel, current) {
+    const me = state.user.name, names = [];
+    for (const n of [me].concat(state.team, state.online)) if (n && names.indexOf(n) < 0) names.push(n);
+    if (current && names.indexOf(current) < 0) names.push(current);
+    sel.innerHTML = '';
+    sel.add(new Option('не назначен', ''));
+    for (const n of names) sel.add(new Option(n === me ? 'Я · ' + n : n, n));
+    sel.value = current || '';
+    sel.classList.toggle('empty', !current);
+  }
+
+  function fillAssign() {
+    for (const ph of SGG.PHASES) {
+      const sel = $('assign-' + ph.id);
+      fillPeople(sel, (state.rec && (state.rec.assign || {})[ph.id]) || '');
+      sel.disabled = !state.rec;
+    }
+  }
+
+  async function applyAssign(charId, phaseId, name) {
+    if (!state.batch || !charId) return;
+    const ch = state.batch.chars.find((c) => c.id === charId);
+    try {
+      const rec = await core.setAssign(state.batch, charId, phaseId, name);
+      state.recs[charId] = rec;
+      if (charId === state.charId) state.rec = rec;
+      if (name && state.team.indexOf(name) < 0) { state.team.push(name); $('teamNames').value = state.team.join('\n'); }
+      log(ch.name + ' · ' + SGG.PHASES.find((p) => p.id === phaseId).label + ' → ' + (name || 'не назначен'), 'ok');
+    } catch (e) { fail('Не назначил', e); }
+    fillAssign();
+    if (state.view === 'Team') renderTeam();
+    render();
+  }
+
+  function renderTeam() {
+    const box = $('teamTable');
+    box.innerHTML = '';
+    if (!state.batch) return;
+    for (const t of ['Персонаж'].concat(SGG.PHASES.map((p) => p.label))) {
+      const h = document.createElement('span');
+      h.className = 'head';
+      h.textContent = t;
+      box.append(h);
+    }
+    for (const ch of state.batch.chars) {
+      const who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = ch.name;
+      box.append(who);
+      for (const ph of SGG.PHASES) {
+        const sel = document.createElement('select');
+        sel.setAttribute('aria-label', ch.name + ' — ' + ph.label);
+        fillPeople(sel, ((state.recs[ch.id] || {}).assign || {})[ph.id] || '');
+        sel.addEventListener('change', (e) => applyAssign(ch.id, ph.id, e.target.value));
+        box.append(sel);
+      }
+    }
+  }
+
+  async function loadTeam() {
+    if (!state.batch) return;
+    const id = state.batch.id;
+    try {
+      const got = await Promise.all([core.getTeam(id)].concat(state.batch.chars.map((c) => core.getChar(id, c.id))));
+      if (!state.batch || state.batch.id !== id) return;
+      state.team = got[0];
+      state.batch.chars.forEach((c, i) => { state.recs[c.id] = got[i + 1]; });
+      if (document.activeElement !== $('teamNames')) $('teamNames').value = state.team.join('\n');
+    } catch (e) { fail('Не прочитал назначения', e); }
+    renderTeam();
   }
 
   function render() {
@@ -258,6 +338,8 @@
     $('dropHint').firstElementChild.textContent = state.loading ? 'Беру картинку…' : 'Кинь картинку на доску';
     $('queueInfo').textContent = state.queue.length ? 'в очереди ещё ' + state.queue.length : '';
     $('charSelect').value = state.charId || '';
+    $('guessNote').hidden = !state.hint;
+    $('guessNote').textContent = state.hint;
     document.querySelectorAll('.chip').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.type === state.typeId)));
     $('jiraField').hidden = !(type && type.primary);
     // Та же стадия, что сейчас в карточке: это новая итерация или перезалив текущей?
@@ -283,6 +365,8 @@
         route = 'Встанет в карточку «' + ch.name + '» как ' + type.en + ' v' + ((rec.vers[type.id] || 0) + 1);
         route += type.deck ? ' и в «' + SGG.DECK_BY_KEY[type.deck].title + '».' : '.';
         if (rec.pv) route += ' Текущая (' + SGG.entryTitle(rec.pv) + ') уйдёт в историю.';
+        const ph = type.stage ? SGG.phaseOfStage(type.stage) : null;
+        if (ph && state.user.name && !(rec.assign || {})[ph.id]) route += ' Фаза ' + ph.label + ' запишется на тебя.';
       }
     }
     $('route').textContent = route;
@@ -294,7 +378,6 @@
     $('charSelect2').value = state.charId || '';
     const has = !!(ch && rec);
     $('statusSelect').disabled = !has || state.busy;
-    $('saveArtists').disabled = !has || state.busy;
     $('showArchive').disabled = !has || state.busy;
     $('showArchive').textContent = has && rec.open ? 'Свернуть историю на доске' : 'Раскрыть историю на доске';
     $('statusSelect').value = has ? rec.status : 'todo';
@@ -342,6 +425,8 @@
       });
       remember('char:' + state.batch.id, state.charId);
       state.rec = res.rec;
+      state.recs[state.charId] = res.rec;
+      if (state.user.name && state.team.indexOf(state.user.name) < 0) state.team.push(state.user.name);
       let line = res.charName + ' · ' + res.title + (res.replaced ? ' — перезалит в карточке' : ' — в карточке') + (res.deckTitle ? ' и в деке «' + res.deckTitle + '»' : '');
       if (res.archived) line += ', в архив ушло: ' + res.archived;
       line += ' · статус ' + SGG.STATUS_BY_ID[res.status].label;
@@ -351,7 +436,7 @@
       $('statusAfter').value = '';
       setIter('new');
       state.busy = false;
-      fillArtists();
+      fillAssign();
       finishCurrent();
       try { const it = await core.getItem(res.cardImageId); if (it) await board.viewport.zoomTo(it); } catch (e) { /* не критично */ }
     } catch (e) {
@@ -399,9 +484,19 @@
   buildStatic();
   $('version').textContent = 'SGG Delivery Bot ' + SGG.VERSION + ' · песочница';
 
-  document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => { showView(b.dataset.view); if (b.dataset.view === 'Char') loadChar(); }));
+  document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => {
+    showView(b.dataset.view);
+    if (b.dataset.view === 'Char') loadChar();
+    if (b.dataset.view === 'Team') { renderTeam(); loadTeam(); }
+  }));
   $('batchSelect').addEventListener('change', (e) => selectBatch(e.target.value).catch((err) => fail('Батч', err)));
-  const onChar = async (e) => { state.charId = e.target.value || null; if (state.charId) remember('char:' + state.batch.id, state.charId); await loadChar(); };
+  const onChar = async (e) => {
+    state.charId = e.target.value || null;
+    state.touched.char = true; // выбрано руками — догадка по месту больше не вмешивается
+    state.hint = '';
+    if (state.charId) remember('char:' + state.batch.id, state.charId);
+    await loadChar();
+  };
   $('charSelect').addEventListener('change', onChar);
   $('charSelect2').addEventListener('change', onChar);
   document.querySelectorAll('input[name="iter"]').forEach((r) => r.addEventListener('change', render));
@@ -432,19 +527,22 @@
     state.busy = false;
     render();
   });
-  $('saveArtists').addEventListener('click', async () => {
-    if (!state.rec || state.busy) return;
-    state.busy = true;
-    render();
+  $('saveTeam').addEventListener('click', async () => {
     try {
-      const artists = {};
-      for (const st of SGG.STAGES) artists[st.id] = $('artist-' + st.id).value;
-      state.rec = await core.setArtists(state.batch, state.charId, artists);
-      log('Исполнители сохранены.', 'ok');
-    } catch (err) { fail('Не сохранил исполнителей', err); }
-    state.busy = false;
-    fillArtists();
-    render();
+      state.team = await core.setTeam(state.batch.id, $('teamNames').value.split(/[\n,;]+/));
+      $('teamNames').value = state.team.join('\n');
+      log('Команда сохранена: ' + (state.team.length ? state.team.join(', ') : 'пусто') + '.', 'ok');
+      fillAssign();
+      renderTeam();
+    } catch (e) { fail('Не сохранил команду', e); }
+  });
+  $('teamOnline').addEventListener('click', async () => {
+    try { state.online = (await board.getOnlineUsers()).map((u) => u.name).filter(Boolean); } catch (e) { /* остаётся прежний список */ }
+    const have = $('teamNames').value.split(/[\n,;]+/).map((n) => n.trim()).filter(Boolean);
+    const add = state.online.concat(state.user.name ? [state.user.name] : []).filter((n, i, a) => have.indexOf(n) < 0 && a.indexOf(n) === i);
+    if (!add.length) { log('Все, кто сейчас на доске, уже в списке.'); return; }
+    $('teamNames').value = have.concat(add).join('\n');
+    log('Добавил: ' + add.join(', ') + '. Нажми «Сохранить команду».');
   });
   $('showArchive').addEventListener('click', async () => {
     if (!state.rec || state.busy) return;
@@ -454,11 +552,7 @@
       const res = await core.toggleHistory(state.batch, state.charId);
       state.rec = res.rec;
       if (!res.count) log('У этого персонажа пока нет прошлых сабмитов.', 'warn');
-      else {
-        const ui = state.batch.ui[state.charId];
-        const ends = (await Promise.all([core.getItem(ui.status), core.getItem(ui.fb)])).filter(Boolean);
-        if (ends.length) await board.viewport.zoomTo(ends);
-      }
+      else if (res.focus.length) await board.viewport.zoomTo(res.focus);
     } catch (e) { fail('Не раскрыл историю', e); }
     state.busy = false;
     render();

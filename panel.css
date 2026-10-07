@@ -24,7 +24,7 @@ body {
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
 .tabs button {
   background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
-  padding: 8px 10px; color: var(--muted); font-weight: 600;
+  padding: 8px 8px; color: var(--muted); font-weight: 600; white-space: nowrap;
 }
 .tabs button[aria-current="true"] { color: var(--ink); border-bottom-color: var(--accent); }
 .batch-select { margin-bottom: 12px; }
@@ -81,8 +81,19 @@ button:disabled { opacity: .45; cursor: default; }
 .status-row { display: flex; align-items: center; gap: 8px; }
 .swatch { flex: 0 0 22px; height: 22px; border-radius: 6px; border: 1px solid var(--line); }
 .artists { display: flex; flex-direction: column; gap: 6px; }
-.artist { display: grid; grid-template-columns: 10px 92px 1fr; align-items: center; gap: 8px; font-size: 13px; }
-.dot { width: 10px; height: 10px; border-radius: 50%; display: block; }
+.artist { display: grid; grid-template-columns: 56px 1fr; align-items: center; gap: 8px; font-size: 13px; }
+.guess { color: var(--accent); margin: -6px 0 12px; }
+
+textarea {
+  width: 100%; padding: 8px 10px; font: inherit; color: inherit; resize: vertical;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg);
+}
+textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.team-table { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px 6px; align-items: center; font-size: 12px; }
+.team-table .head { color: var(--muted); }
+.team-table .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-table select { height: 30px; padding: 0 4px; font-size: 12px; }
+.team-table select.empty { color: var(--muted); }
 
 .timeline { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .tl-row {
