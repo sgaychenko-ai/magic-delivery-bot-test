@@ -33,9 +33,34 @@
 
   async function openPanel(data) {
     if (!(await board.ui.canOpenPanel())) return false;
-    await board.ui.openPanel({ url: new URL('panel.html', window.location.href).href, data: data || {} });
+    // Версия в адресе — чтобы после обновления бота браузер не подсунул старую панель из кэша.
+    await board.ui.openPanel({ url: new URL('panel.html?v=' + SGG.VERSION, window.location.href).href, data: data || {} });
     return true;
   }
+
+  // ---------- версия ----------
+  // Вкладка с доской может быть открыта давно, а бот за это время обновился. Старая невидимая часть не узнаёт
+  // карточки нового формата, и кнопки молчат. Поэтому она сама проверяет, не вышла ли новая версия, и говорит об этом.
+  let newer = null, checkedAt = 0;
+  const staleText = () => 'Вышла версия бота ' + newer + '. Обнови страницу доски';
+  async function checkVersion(force) {
+    if (!force && Date.now() - checkedAt < 30000) return newer;
+    checkedAt = Date.now();
+    const v = await SGG.latestVersion();
+    if (v && v !== SGG.VERSION && v !== newer) { newer = v; note(staleText()); }
+    return newer;
+  }
+  let boardId; // панель спрашивает по каналу, жива ли невидимая часть на этой доске и какой она версии
+  async function myBoard() {
+    if (boardId === undefined) { try { boardId = (await board.getInfo()).id; } catch (e) { boardId = null; } }
+    return boardId;
+  }
+  try {
+    const ch = new BroadcastChannel(SGG.CHANNEL);
+    ch.onmessage = async (e) => {
+      if (e.data && e.data.ask === 'headless') ch.postMessage({ headless: SGG.VERSION, board: await myBoard(), to: e.data.from });
+    };
+  } catch (e) { /* без канала панель просто не сможет проверить версию */ }
 
   async function batches(force) {
     if (force || Date.now() - cache.at > 20000) cache = { at: Date.now(), batches: await core.loadBatchesFull() };
@@ -116,6 +141,15 @@
     } catch (e) { /* не критично */ }
   }
 
+  /** Нажали на плашку карточки, которую бот не узнал. Говорим почему, а не молчим. */
+  async function unknownButton() {
+    let list = [];
+    try { list = await core.listBatches(); } catch (e) { /* хранилище недоступно */ }
+    if (list.some((b) => b.v > SGG.FORMAT) || (await checkVersion(true))) { note(newer ? staleText() : 'Бот на этой вкладке устарел. Обнови страницу доски'); return; }
+    if (list.some((b) => b.v < SGG.FORMAT)) { note('Этот батч от старой версии бота. Открой панель — она предложит пересоздать'); return; }
+    diag('эта плашка не из моего батча · батчей вижу: ' + cache.batches.length);
+  }
+
   async function onButton(items) {
     try {
       const one = items && items.length === 1 && items[0].type === 'shape' ? items[0] : null;
@@ -125,9 +159,14 @@
         if (!fresh && !(one && one.id === menu.anchorId)) await closeMenu(null); // кликнули мимо списка
       }
       if (!one) return;
-      const hit = core.findButton(await batches(false), one.id);
+      let hit = core.findButton(await batches(false), one.id);
+      if (!hit && /▾|History/.test(String(one.content || ''))) {
+        // Похоже на кнопку карточки, но бот её не знает: батч только что построили или он от другой версии бота.
+        hit = core.findButton(await batches(true), one.id);
+        if (!hit) { await unknownButton(); return; }
+      }
       if (!hit) return;
-      try { const p = board.deselect({ id: one.id }); if (p && p.catch) p.catch(() => {}); } catch (e) { /* рамку выделения снимаем, не дожидаясь ответа */ }
+      const unselect = Promise.resolve().then(() => board.deselect({ id: one.id })).catch(() => {}); // рамку выделения снимаем, не дожидаясь ответа
       const key = hit.batch.id + ':' + hit.charId + ':' + hit.action;
       if (busy.has(key)) return; // второе нажатие, пока первое ещё выполняется
       busy.add(key);
@@ -135,7 +174,7 @@
         if (hit.action === 'hist') { await onHistory(hit); return; }
         const same = menu && menu.anchorId === one.id;
         if (menu) await closeMenu(null);
-        if (!same) await openMenuFor(hit, one); // повторный клик по той же плашке просто закрывает список
+        if (!same) { await unselect; await openMenuFor(hit, one); } // повторный клик по той же плашке просто закрывает список
       } finally { busy.delete(key); }
     } catch (e) {
       console.error('[SGG bot]', e);
@@ -144,6 +183,8 @@
   }
 
   board.ui.on('icon:click', () => openPanel());
+  checkVersion(true);
+  setInterval(() => checkVersion(true), 10 * 60 * 1000);
   board.ui.on('items:create', (e) => onImages('items:create', e.items, false));
   board.ui.on('selection:update', (e) => { onImages('selection', e.items, true); onButton(e.items); });
 })();

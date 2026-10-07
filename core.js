@@ -5,7 +5,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '0.3.1';
+  const VERSION = '0.3.2';
   const MARK = 'SGG-BOT';
   const COLLECTION = 'sgg-delivery';
   const FORMAT = 4; // формат батча: 4 = карточки с назначениями по фазам
@@ -109,6 +109,18 @@
     }
     return out;
   }
+
+  /** Какая версия бота сейчас лежит на хостинге. null — узнать не удалось. Нужна, чтобы заметить устаревшую вкладку. */
+  async function latestVersion() {
+    try {
+      if (typeof fetch !== 'function' || typeof location === 'undefined' || (typeof self !== 'undefined' && self.SGG_OFFLINE)) return null;
+      const res = await fetch(new URL('version.json', location.href).href + '?t=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) return null;
+      const v = (await res.json()).version;
+      return typeof v === 'string' ? v : null;
+    } catch (e) { return null; }
+  }
+  const CHANNEL = 'sgg-delivery-bot'; // по этому каналу панель спрашивает невидимую часть бота, какой она версии
 
   /** Ссылка на Jira: полный URL, либо ключ задачи + базовый адрес из настроек батча. */
   function normalizeJira(input, base) {
@@ -873,6 +885,6 @@
 
   return {
     VERSION, MARK, FORMAT, STATUSES, STATUS_BY_ID, STAGES, STAGE_COLS, PHASES, TYPES, TYPE_BY_ID, DECKS, DECK_BY_KEY, DEFAULT_CHARACTERS, L,
-    create, pickImages, isBotImage, normalizeJira, shortName, phaseOfStage, deckGrid, deckSlot, archiveSlot, fitSide, timeline, pastSubmits, entryTitle, esc, ddmm,
+    create, latestVersion, CHANNEL, pickImages, isBotImage, normalizeJira, shortName, phaseOfStage, deckGrid, deckSlot, archiveSlot, fitSide, timeline, pastSubmits, entryTitle, esc, ddmm,
   };
 });

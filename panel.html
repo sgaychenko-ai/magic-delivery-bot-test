@@ -4,11 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SGG Delivery Bot</title>
-    <link rel="stylesheet" href="panel.css" />
+    <link rel="stylesheet" href="panel.css?v=0.3.2" />
     <script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
-    <script src="core.js"></script>
+    <script src="core.js?v=0.3.2"></script>
   </head>
   <body>
+    <div id="stale" class="legacy" hidden></div>
     <nav id="tabs" class="tabs" hidden>
       <button type="button" data-view="Delivery">Доставка</button>
       <button type="button" data-view="Char">Персонаж</button>
@@ -156,6 +157,6 @@
     <div id="log" class="log" aria-live="polite"></div>
     <footer class="foot"><span id="version"></span></footer>
 
-    <script src="panel.js"></script>
+    <script src="panel.js?v=0.3.2"></script>
   </body>
 </html>

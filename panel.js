@@ -630,7 +630,34 @@
     btn.textContent = 'Удалить батч с доски';
   });
 
+  // ---------- версия ----------
+  /** Спрашивает невидимую часть бота на этой доске, какой она версии. null — не ответила. */
+  async function askHeadless() {
+    let ch;
+    try { ch = new BroadcastChannel(SGG.CHANNEL); } catch (e) { return undefined; } // канала нет — проверить нечем
+    let mine = null;
+    try { mine = (await board.getInfo()).id; } catch (e) { /* сравним без номера доски */ }
+    const from = Math.random().toString(36).slice(2);
+    let got = null;
+    ch.onmessage = (e) => { const d = e.data; if (d && d.headless && d.to === from && (!mine || !d.board || d.board === mine)) got = d.headless; };
+    for (let n = 0; n < 3 && !got; n++) { ch.postMessage({ ask: 'headless', from }); await sleep(1200); }
+    ch.close();
+    return got;
+  }
+  async function checkVersions() {
+    const el = $('stale');
+    const say = (text) => { el.textContent = text + ' Обнови страницу доски: Cmd + R на Mac, Ctrl + R на Windows.'; el.hidden = false; };
+    try {
+      const latest = await SGG.latestVersion();
+      if (latest && latest !== SGG.VERSION) { say('Вышла версия бота ' + latest + ', а открыта ' + SGG.VERSION + '.'); return; }
+      const head = await askHeadless();
+      if (head === null) say('Похоже, доска открыта со старой версией бота — тогда кнопки на карточках (статус, Sketch, Render, History) не работают.');
+      else if (head && head !== SGG.VERSION) say('На доске работает бот ' + head + ', а панель уже ' + SGG.VERSION + ' — кнопки на карточках могут не работать.');
+    } catch (e) { /* проверка версии не должна мешать работе */ }
+  }
+
   // ---------- старт ----------
+  checkVersions();
   try {
     try { const u = await board.getUserInfo(); state.user = { id: u.id, name: u.name || '' }; } catch (e) { /* без identity:read работаем без имени */ }
     try { state.online = (await board.getOnlineUsers()).map((u) => u.name).filter(Boolean); } catch (e) { /* список подсказок не критичен */ }
