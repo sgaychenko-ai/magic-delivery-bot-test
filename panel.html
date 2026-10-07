@@ -59,16 +59,21 @@
       </label>
 
       <div class="field">
-        <span>Основная доставка</span>
-        <div id="types-main" class="chips"></div>
+        <span>Стадия</span>
+        <div id="types-stage" class="chips"></div>
       </div>
       <div class="field">
-        <span>Продакшен</span>
-        <div id="types-prod" class="chips"></div>
+        <span>Дополнительно</span>
+        <div id="types-extra" class="chips"></div>
       </div>
       <div class="field">
         <span>Фидбек</span>
         <div id="types-fb" class="chips"></div>
+      </div>
+
+      <div id="iterBox" class="iter" hidden>
+        <label><input type="radio" name="iter" value="new" checked /> <span id="iterNew">Новая итерация</span></label>
+        <label><input type="radio" name="iter" value="redo" /> <span id="iterRedo">Перезалить текущую</span></label>
       </div>
 
       <label id="jiraField" class="field" hidden>
@@ -111,7 +116,7 @@
       <hr />
       <h2>История</h2>
       <div id="timeline" class="timeline"></div>
-      <button id="showArchive" class="secondary" type="button">Показать архив на доске</button>
+      <button id="showArchive" class="secondary" type="button">Раскрыть историю на доске</button>
     </section>
 
     <!-- Настройки батча -->
@@ -125,6 +130,7 @@
       <label class="check"><input id="diag" type="checkbox" /> Диагностика: показывать, какие события доски видит бот</label>
       <hr />
       <button id="showBatch" class="secondary" type="button">Показать батч на доске</button>
+      <button id="collapseAll" class="secondary" type="button">Свернуть все раскрытые истории</button>
       <button id="newBatch" class="secondary" type="button">Создать ещё один тестовый батч</button>
       <button id="deleteBatch" class="danger" type="button">Удалить батч с доски</button>
       <div id="deleteProgress" class="progress" hidden><i></i></div>

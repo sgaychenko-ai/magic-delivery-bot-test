@@ -5,10 +5,10 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '0.2.0';
+  const VERSION = '0.3.0';
   const MARK = 'SGG-BOT';
   const COLLECTION = 'sgg-delivery';
-  const FORMAT = 2; // формат батча: 2 = карточки персонажей
+  const FORMAT = 3; // формат батча: 3 = карточки персонажей, дека по порядку готовности
 
   // Статусы над персонажем — как на рабочей доске.
   const STATUSES = [
@@ -22,15 +22,20 @@
   ];
   const STATUS_BY_ID = Object.fromEntries(STATUSES.map((s) => [s.id, s]));
 
-  // Основные стадии — полоска в карточке, у каждой свой исполнитель.
+  // Стадии персонажа по порядку — полоска в карточке, у каждой свой исполнитель и свой счёт итераций.
   const STAGES = [
-    { id: 'pose', label: 'Pose' },
-    { id: 'design', label: 'Design' },
-    { id: 'color', label: 'Color' },
+    { id: 'mood', label: 'Moodboard' },
+    { id: 'pose', label: 'B/W Poses' },
+    { id: 'design', label: 'B/W Design' },
+    { id: 'color', label: 'Color Sketch' },
+    { id: 'mid', label: 'Mid Render' },
     { id: 'render', label: 'Render' },
   ];
+  const STAGE_COLS = 3; // полоска стадий в два ряда по три
 
   // Секции Comparison Deck и какие типы доставки в них попадают.
+  // В секции у персонажа одно место — там его последний сабмит из этих типов. Места идут по порядку готовности:
+  // кто первым сдал, тот первый в ряду, поэтому готовые работы стоят рядом, а не разбросаны по номерам персонажей.
   const DECKS = [
     { key: 'pose', title: 'B/W Poses', types: ['pose'] },
     { key: 'sketch', title: 'Approved Sketch (and WIPs)', types: ['design', 'color'] },
@@ -39,14 +44,17 @@
   ];
   const DECK_BY_KEY = Object.fromEntries(DECKS.map((d) => [d.key, d]));
 
-  // Что можно доставить. color — цвет стадии на доске; fb — чей фидбек.
+  // Что можно доставить. label — в панели, en — в подписях на доске, color — цвет стадии, fb — чей фидбек.
+  // У стадии каждая новая доставка — следующая итерация (v1, v2, …).
   const TYPES = [
-    { id: 'color', label: 'Колор скетч', en: 'Color sketch', group: 'main', stage: 'color', deck: 'sketch', short: 'Color', primary: true, color: '#D85A30' },
-    { id: 'render', label: 'Рендер', en: 'Render', group: 'main', stage: 'render', deck: 'render', short: 'Render', primary: true, color: '#1D9E75' },
-    { id: 'pose', label: 'Ч/Б поза', en: 'B/W pose', group: 'prod', stage: 'pose', deck: 'pose', short: 'Pose', color: '#5F5E5A' },
-    { id: 'design', label: 'Ч/Б дизайн', en: 'B/W design', group: 'prod', stage: 'design', deck: 'sketch', short: 'B/W', color: '#5F5E5A' },
-    { id: 'face', label: 'Лицо', en: 'Portrait', group: 'prod', stage: null, deck: 'portrait', short: 'Face', color: '#888780' },
-    { id: 'sketch', label: 'Скетч / WIP', en: 'Sketch / WIP', group: 'prod', stage: null, deck: null, short: 'WIP', color: '#888780' },
+    { id: 'mood', label: 'Moodboard', en: 'Moodboard', group: 'stage', stage: 'mood', deck: null, short: 'Mood', color: '#9A6B1F' },
+    { id: 'pose', label: 'B/W Poses', en: 'B/W Poses', group: 'stage', stage: 'pose', deck: 'pose', short: 'Pose', color: '#5F5E5A' },
+    { id: 'design', label: 'B/W Design', en: 'B/W Design', group: 'stage', stage: 'design', deck: 'sketch', short: 'B/W', color: '#5F5E5A' },
+    { id: 'color', label: 'Color Sketch', en: 'Color Sketch', group: 'stage', stage: 'color', deck: 'sketch', short: 'Color', primary: true, color: '#D85A30' },
+    { id: 'mid', label: 'Mid Render', en: 'Mid Render', group: 'stage', stage: 'mid', deck: null, short: 'Mid', color: '#1D9E75' },
+    { id: 'render', label: 'Render', en: 'Render', group: 'stage', stage: 'render', deck: 'render', short: 'Render', primary: true, color: '#0F6E56' },
+    { id: 'face', label: 'Лицо', en: 'Portrait', group: 'extra', stage: null, deck: 'portrait', short: 'Face', color: '#888780' },
+    { id: 'sketch', label: 'Скетч / WIP', en: 'Sketch / WIP', group: 'extra', stage: null, deck: null, short: 'WIP', color: '#888780' },
     { id: 'fb_lead', label: 'Фидбек лида', en: 'Lead feedback', group: 'fb', fb: 'lead', color: '#7F77DD', tint: '#EEEDFE' },
     { id: 'fb_client', label: 'Фидбек клиента', en: 'Client feedback', group: 'fb', fb: 'client', color: '#378ADD', tint: '#E6F1FB' },
   ];
@@ -59,10 +67,12 @@
   // Размеры тестового батча (в единицах доски).
   const L = {
     titleH: 60, deckW: 920, deckGap: 60, deckHeaderH: 40, sideGap: 40,
-    cardW: 360, cardGap: 20, tagH: 30, nameH: 34, stageH: 46, pvH: 300, fbH: 150, histH: 28, gap: 6,
-    archGap: 160, archHeadH: 36, archLabelH: 24, archCellH: 160, archCapH: 28,
+    cardW: 360, cardGap: 20, tagH: 30, nameH: 34, stageH: 38, stageGap: 4, pvH: 300, fbH: 150, histH: 28, gap: 6,
+    archGap: 3200, archHeadH: 36, archLabelH: 24, archCellH: 160, archCapH: 28,
   };
-  const cardHeight = () => L.tagH + L.nameH + L.stageH + L.pvH + L.fbH + L.histH + L.gap * 5;
+  const stageRows = () => Math.ceil(STAGES.length / STAGE_COLS);
+  const stripHeight = () => stageRows() * L.stageH + (stageRows() - 1) * L.stageGap;
+  const cardHeight = () => L.tagH + L.nameH + stripHeight() + L.pvH + L.fbH + L.histH + L.gap * 5;
 
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const pad2 = (n) => String(n).padStart(2, '0');
@@ -110,11 +120,9 @@
   }
 
   /** Сетка слотов внутри секции деки. rect — центр и размеры зоны в координатах доски. */
-  function deckGrid(rect, perChar) {
+  function deckGrid(rect) {
     const gap = 10, cellW = 140, capH = 20, cellH = 150, padTop = 10;
-    let cols = Math.max(1, Math.floor((rect.w - gap) / (cellW + gap)));
-    if (perChar > 1 && cols >= perChar) cols -= cols % perChar; // пары одного персонажа не рвутся по строкам
-    return { gap, cellW, cellH, capH, padTop, cols };
+    return { gap, cellW, cellH, capH, padTop, cols: Math.max(1, Math.floor((rect.w - gap) / (cellW + gap))) };
   }
 
   function deckSlot(rect, g, i) {
@@ -138,10 +146,9 @@
     return r >= areaW / areaH ? { width: areaW } : { height: areaH };
   }
 
-  function deckHeight(chars, deck) {
-    const g = deckGrid({ w: L.deckW }, deck.types.length);
-    const rows = Math.ceil((chars * deck.types.length) / g.cols) + 1; // +1 строка запаса
-    return g.padTop + rows * (g.cellH + g.gap) + g.gap;
+  function deckHeight(chars) {
+    const g = deckGrid({ w: L.deckW });
+    return g.padTop + (Math.ceil(chars / g.cols) + 1) * (g.cellH + g.gap) + g.gap; // +1 строка запаса
   }
 
   /** Оборачивает шаг, чтобы в ошибке было видно, на чём именно споткнулись. */
@@ -162,15 +169,20 @@
     return out;
   }
 
-  const emptyChar = () => ({ status: 'todo', artists: {}, cur: null, vers: {}, pv: null, fb: null, deck: {}, arch: [] });
+  const emptyChar = () => ({ status: 'todo', artists: {}, cur: null, vers: {}, pv: null, fb: null, deck: {}, arch: [], open: false, shift: 0, cells: [], menu: [] });
+
+  // Порядок сдачи: номер сабмита у персонажа; время — запасной ключ для записей без номера.
+  const byTime = (a, b) => (a.n || 0) - (b.n || 0) || (a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
+
+  /** Прошлые сабмиты персонажа по порядку сдачи, старые первыми. */
+  const pastSubmits = (rec) => rec.arch.slice().sort(byTime);
 
   /** Лента истории персонажа, свежее сверху. */
   function timeline(rec) {
-    const out = [];
-    if (rec.fb) out.push(Object.assign({ where: 'card' }, rec.fb));
+    const out = rec.arch.map((e) => Object.assign({ where: 'archive' }, e));
     if (rec.pv) out.push(Object.assign({ where: 'card' }, rec.pv));
-    for (let i = rec.arch.length - 1; i >= 0; i--) out.push(Object.assign({ where: 'archive' }, rec.arch[i]));
-    return out;
+    if (rec.fb) out.push(Object.assign({ where: 'card' }, rec.fb));
+    return out.sort(byTime).reverse();
   }
 
   /** Короткая подпись записи истории: «Color sketch v2» или «Client feedback · Color sketch v2». */
@@ -189,14 +201,14 @@
     const order = STAGES.map((s) => s.id);
     const type = TYPE_BY_ID[stage.id];
     const who = esc(rec.artists[stage.id] || '—');
-    const started = (rec.vers[stage.id] || 0) > 0;
+    const ver = rec.vers[stage.id] || 0; // сколько итераций уже сдано
     if (rec.cur === stage.id) {
-      return { content: para('<strong>' + stage.label + '</strong>') + para(who), style: Object.assign({}, BASE, { fillColor: type.color, borderColor: type.color, color: '#FFFFFF' }) };
+      return { content: para('<strong>' + stage.label + '</strong> · v' + ver) + para(who), style: Object.assign({}, BASE, { fillColor: type.color, borderColor: type.color, color: '#FFFFFF' }) };
     }
-    if (started && order.indexOf(stage.id) < order.indexOf(rec.cur)) {
-      return { content: para('<strong>✓ ' + stage.label + '</strong>') + para(who), style: Object.assign({}, BASE, { fillColor: '#EDEDED', borderColor: '#CFCFCF', color: '#1F1F1F' }) };
+    if (ver > 0 && order.indexOf(stage.id) < order.indexOf(rec.cur)) {
+      return { content: para('<strong>✓ ' + stage.label + '</strong>' + (ver > 1 ? ' · v' + ver : '')) + para(who), style: Object.assign({}, BASE, { fillColor: '#EDEDED', borderColor: '#CFCFCF', color: '#1F1F1F' }) };
     }
-    return { content: para(stage.label) + para(who), style: Object.assign({}, BASE, { fillColor: '#FFFFFF', borderColor: '#D0D0D0', color: '#8C8C8C' }) };
+    return { content: para(stage.label + (ver > 0 ? ' · v' + ver : '')) + para(who), style: Object.assign({}, BASE, { fillColor: '#FFFFFF', borderColor: '#D0D0D0', color: '#8C8C8C' }) };
   }
   const pvLook = (rec) => {
     const t = rec.pv ? TYPE_BY_ID[rec.pv.type] : null;
@@ -209,10 +221,12 @@
       style: Object.assign({}, BASE, { textAlign: 'left', textAlignVertical: 'top', fillColor: t ? t.tint : '#FAFAFA', borderColor: t ? t.color : '#D0D0D0', borderWidth: t ? 2 : 1, color: t ? t.color : '#9A9A9A' }),
     };
   };
-  const histLook = (rec) => ({
-    content: para('History · ' + timeline(rec).length + ' ▸'),
-    style: Object.assign({}, BASE, { fontSize: 11, fillColor: '#F2F2F2', borderColor: '#D0D0D0', color: '#444444' }),
-  });
+  // Кнопка истории стоит под полоской стадий и не двигается: раскрыл и свернул в одном и том же месте.
+  const histLook = (rec) => {
+    const n = rec.arch.length;
+    const text = rec.open ? '▾ Hide history' : n ? '▸ History · ' + n + ' earlier' : 'History · no earlier submits';
+    return { content: para('<strong>' + text + '</strong>'), style: Object.assign({}, BASE, { fontSize: 11, fillColor: n ? '#E8ECFF' : '#F2F2F2', borderColor: n ? '#4262FF' : '#D0D0D0', color: n ? '#2A3FBF' : '#8C8C8C' }) };
+  };
 
   function create(miro) {
     const board = miro.board;
@@ -276,7 +290,7 @@
 
       const cardsW = chars.length * (L.cardW + L.cardGap) - L.cardGap;
       const totalW = L.deckW + L.sideGap + cardsW;
-      const deckH = L.deckHeaderH + DECKS.reduce((s, d) => s + L.deckGap + deckHeight(chars.length, d), 0);
+      const deckH = L.deckHeaderH + DECKS.length * (L.deckGap + deckHeight(chars.length));
       const cardH = cardHeight();
       const totalH = L.titleH + 40 + Math.max(deckH, cardH + L.archGap + L.archHeadH + L.archLabelH);
 
@@ -307,14 +321,16 @@
       top += L.deckHeaderH;
       for (const d of DECKS) {
         top += L.deckGap;
-        const h = deckHeight(chars.length, d);
+        const h = deckHeight(chars.length);
         jobs.push({ kind: 'frame', zone: 'deck:' + d.key, props: { title: d.title, x: ox + L.deckW / 2, y: top + h / 2, width: L.deckW, height: h, style: { fillColor: '#f2f2f2' } } });
         top += h;
       }
       const cardsLeft = ox + L.deckW + L.sideGap;
       const archTop = bodyTop + cardH + L.archGap;
-      shape(cardsLeft, archTop, cardsW, L.archHeadH, grey('ARCHIVE · earlier versions and closed feedback, managed by the bot'));
-      const stageW = (L.cardW - 4 * (STAGES.length - 1)) / STAGES.length;
+      const archHead = grey('STORAGE · earlier submits rest here while the card history is collapsed (managed by the bot)');
+      archHead.style.textAlign = 'left';
+      shape(cardsLeft, archTop, cardsW, L.archHeadH, archHead);
+      const stageW = (L.cardW - L.stageGap * (STAGE_COLS - 1)) / STAGE_COLS;
       chars.forEach((ch, i) => {
         const left = cardsLeft + i * (L.cardW + L.cardGap);
         let t = bodyTop;
@@ -322,13 +338,13 @@
         t += L.tagH + L.gap;
         shape(left, t, L.cardW, L.nameH, dark(ch.name, 14), { ref: [ch.id, 'name'] });
         t += L.nameH + L.gap;
-        STAGES.forEach((st, k) => shape(left + k * (stageW + 4), t, stageW, L.stageH, stageLook(st, blank), { ref: [ch.id, 'st:' + st.id] }));
-        t += L.stageH + L.gap;
+        STAGES.forEach((st, k) => shape(left + (k % STAGE_COLS) * (stageW + L.stageGap), t + Math.floor(k / STAGE_COLS) * (L.stageH + L.stageGap), stageW, L.stageH, stageLook(st, blank), { ref: [ch.id, 'st:' + st.id] }));
+        t += stripHeight() + L.gap;
+        shape(left, t, L.cardW, L.histH, histLook(blank), { ref: [ch.id, 'hist'] });
+        t += L.histH + L.gap;
         shape(left, t, L.cardW, L.pvH, pvLook(blank), { ref: [ch.id, 'pv'] });
         t += L.pvH + L.gap;
         shape(left, t, L.cardW, L.fbH, fbLook(blank), { ref: [ch.id, 'fb'] });
-        t += L.fbH + L.gap;
-        shape(left, t, L.cardW, L.histH, histLook(blank), { ref: [ch.id, 'hist'] });
         shape(left, archTop + L.archHeadH + L.gap, L.cardW, L.archLabelH, { content: para(esc(ch.name)), style: Object.assign({}, BASE, { fillColor: '#F2F2F2', borderColor: '#D0D0D0', color: '#444444' }) }, { ref: [ch.id, 'ar'] });
       });
 
@@ -375,11 +391,13 @@
     async function deleteBatch(batchId, onProgress) {
       const batch = await getBatch(batchId);
       const ids = [];
-      if (batch && batch.v === FORMAT) {
+      if (batch && batch.ui) { // карточки персонажей (0.2.0 и новее)
+        await Promise.all(DECKS.map((d) => store.remove('deck:' + batchId + ':' + d.key)));
         await inChunks(batch.chars, 8, async (ch) => {
           const rec = await store.get(charKey(batchId, ch.id));
           if (!rec) return;
           for (const e of [rec.pv, rec.fb].concat(rec.arch || [], Object.values(rec.deck || {}))) if (e) ids.push(e.img, e.cap);
+          ids.push(...(rec.cells || []), ...(rec.menu || []));
           await store.remove(charKey(batchId, ch.id));
         });
       } else if (batch) { // батч старого формата (до 0.2.0)
@@ -434,6 +452,40 @@
       return rec;
     }
 
+    /**
+     * Выпадающий список статусов прямо на доске: семь плашек под статусом персонажа.
+     * Возвращает { idПлашки: idСтатуса }. Плашки временные, их убирает closeStatusMenu.
+     */
+    async function openStatusMenu(batch, charId) {
+      const rec = await getChar(batch.id, charId);
+      if (rec.menu && rec.menu.length) await Promise.all(rec.menu.map((id) => removeIds([id]))); // осталось от прошлого раза
+      const tag = await zoneOf(batch.ui[charId].status, 'статус');
+      const r = tag.rect, top = r.y + r.h / 2 + 2;
+      const made = await Promise.all(STATUSES.map((st, i) => board.createShape({
+        shape: 'rectangle', content: para('<strong>' + (st.id === rec.status ? '✓ ' : '') + st.label + '</strong>'),
+        x: r.x, y: top + i * r.h + r.h / 2, width: r.w, height: r.h,
+        style: Object.assign({}, BASE, { fontSize: 12, fillColor: st.fill, borderColor: st.id === rec.status ? '#1F1F1F' : '#FFFFFF', borderWidth: 2, color: '#1F1F1F' }),
+      })));
+      const map = {};
+      made.forEach((it, i) => { map[it.id] = STATUSES[i].id; });
+      rec.menu = made.map((it) => it.id);
+      await store.set(charKey(batch.id, charId), rec);
+      try { await board.bringToFront(made); } catch (e) { /* порядок слоёв не критичен */ }
+      return map;
+    }
+
+    /** Убирает список статусов; если выбран статус — ставит его. */
+    async function closeStatusMenu(batch, charId, pick) {
+      const rec = await getChar(batch.id, charId);
+      const ids = rec.menu || [];
+      const changed = !!STATUS_BY_ID[pick] && rec.status !== pick;
+      rec.menu = [];
+      if (changed) rec.status = pick;
+      await Promise.all([store.set(charKey(batch.id, charId), rec)].concat(ids.map((id) => removeIds([id]))));
+      if (changed) await refreshCard(batch, charId, rec, { status: true });
+      return { rec, changed };
+    }
+
     async function setArtists(batch, charId, artists) {
       const rec = await getChar(batch.id, charId);
       for (const st of STAGES) if (artists[st.id] != null) rec.artists[st.id] = String(artists[st.id]).trim().slice(0, 40);
@@ -443,6 +495,22 @@
     }
 
     // ---------- раскладка ----------
+    /**
+     * Место персонажа в секции деки. Первый сабмит персонажа занимает следующее свободное место, дальше оно за ним закреплено.
+     * Запись перечитывается: если двое заняли место одновременно и чья-то запись потерялась, она повторяется.
+     */
+    async function deckIndex(batchId, deckKey, charId) {
+      const key = 'deck:' + batchId + ':' + deckKey;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const list = (await store.get(key)) || [];
+        if (list.indexOf(charId) >= 0) return list.indexOf(charId);
+        await store.set(key, list.concat([charId]));
+        const check = (await store.get(key)) || [];
+        if (check.indexOf(charId) >= 0) return check.indexOf(charId);
+      }
+      throw new Error('Не удалось занять место в «' + DECK_BY_KEY[deckKey].title + '» — попробуй ещё раз.');
+    }
+
     /** Создаёт картинку с подписью в прямоугольнике box = { left, top, w, h, capH }. */
     async function drawAt(box, frame, o) {
       const areaH = box.h - box.capH;
@@ -468,31 +536,85 @@
       return { img: img.id, cap: cap.id, attached };
     }
 
-    /** Переносит картинку и подпись из карточки в слот архива. Файл заново не грузится. */
-    async function moveToArchive(arRect, index, entry) {
-      const s = archiveSlot(arRect, index);
-      const areaH = s.h - s.capH;
+    /** Переносит уже лежащие на доске картинку и подпись в прямоугольник box. Файл заново не грузится. */
+    async function moveInto(box, entry) {
+      const areaH = box.h - box.capH;
       const [img, cap] = await Promise.all([getItem(entry.img), getItem(entry.cap)]);
       const jobs = [];
       if (img) {
-        const side = fitSide(img.width / img.height, s.w, areaH);
+        const side = fitSide(img.width / img.height, box.w, areaH);
         if (side.width) img.width = side.width; else img.height = side.height;
-        img.x = s.left + s.w / 2;
-        img.y = s.top + areaH / 2;
+        img.x = box.left + box.w / 2;
+        img.y = box.top + areaH / 2;
         jobs.push(img.sync());
       }
       if (cap) {
-        cap.width = s.w;
-        cap.x = s.left + s.w / 2;
-        cap.y = s.top + areaH + s.capH / 2;
+        cap.width = box.w;
+        cap.x = box.left + box.w / 2;
+        cap.y = box.top + areaH + box.capH / 2;
         jobs.push(cap.sync());
       }
       await Promise.allSettled(jobs);
+      return [img, cap].filter(Boolean);
+    }
+    const moveToArchive = (arRect, index, entry) => moveInto(archiveSlot(arRect, index), entry);
+
+    /** Сдвигает элементы по вертикали. */
+    async function moveBy(ids, dy) {
+      await Promise.allSettled(ids.filter(Boolean).map(async (id) => {
+        const it = await getItem(id);
+        if (!it) return;
+        it.y += dy;
+        await it.sync();
+      }));
+    }
+
+    /**
+     * Раскрывает или сворачивает историю прямо в карточке.
+     * Раскрыто: под полоской стадий идут все прошлые сабмиты по порядку сдачи, текущая картинка — ниже них.
+     * Свёрнуто: в карточке только текущая, прошлые лежат в хранилище. Файлы не перезагружаются, элементы только двигаются.
+     */
+    async function setHistory(batch, charId, open) {
+      const rec = await getChar(batch.id, charId);
+      const ui = batch.ui[charId];
+      if (!!rec.open === !!open) return { open: !!rec.open, count: rec.arch.length, rec };
+      const current = [ui.pv, rec.pv && rec.pv.img, rec.pv && rec.pv.cap, ui.fb, rec.fb && rec.fb.img, rec.fb && rec.fb.cap];
+      if (open) {
+        const past = pastSubmits(rec);
+        if (!past.length) return { open: false, count: 0, rec };
+        const pv = await zoneOf(ui.pv, 'превью');
+        const r = pv.rect, stepY = r.h + L.gap, shift = past.length * stepY, top0 = r.y - r.h / 2, pad = 8;
+        // Рамки под прошлые сабмиты, цвет рамки — цвет стадии.
+        const cells = await Promise.all(past.map((e, i) => board.createShape({
+          shape: 'rectangle', content: '', x: r.x, y: top0 + i * stepY + r.h / 2, width: r.w, height: r.h,
+          style: Object.assign({}, BASE, { fillColor: (TYPE_BY_ID[e.type] || {}).tint || '#FFFFFF', borderColor: (TYPE_BY_ID[e.type] || {}).color || '#D0D0D0', borderWidth: 2 }),
+        })));
+        const moved = await Promise.all([moveBy(current, shift)].concat(past.map((e, i) => moveInto({ left: r.x - r.w / 2 + pad, top: top0 + i * stepY + pad, w: r.w - pad * 2, h: r.h - pad * 2, capH: 30 }, e))));
+        const onTop = [].concat(...moved.slice(1));
+        if (onTop.length) { try { await board.bringToFront(onTop); } catch (e) { /* порядок слоёв не критичен */ } }
+        rec.open = true; rec.shift = shift; rec.cells = cells.map((c) => c.id);
+      } else {
+        const ar = await zoneOf(ui.ar, 'хранилище');
+        await Promise.all([removeIds(rec.cells || []), moveBy(current, -(rec.shift || 0))].concat(rec.arch.map((e, i) => moveToArchive(ar.rect, i, e))));
+        rec.open = false; rec.shift = 0; rec.cells = [];
+      }
+      await store.set(charKey(batch.id, charId), rec);
+      await refreshCard(batch, charId, rec, { hist: true });
+      return { open: rec.open, count: rec.arch.length, rec };
+    }
+
+    const toggleHistory = async (batch, charId) => setHistory(batch, charId, !(await getChar(batch.id, charId)).open);
+
+    async function collapseAll(batch) {
+      let n = 0;
+      await inChunks(batch.chars, 4, async (ch) => { if ((await getChar(batch.id, ch.id)).open) { await setHistory(batch, ch.id, false); n++; } });
+      return n;
     }
 
     /**
      * Доставка: коммит стадии или фидбек.
-     * opts: { batch, charId, typeId, dataUrl, deckDataUrl?, natural:{w,h}, jira, userName, sourceItemId, statusAfter? }
+     * opts: { batch, charId, typeId, dataUrl, deckDataUrl?, natural:{w,h}, jira, userName, sourceItemId, statusAfter?, replace? }
+     * replace — перезалив: картинка заменяет текущую итерацию этой же стадии, номер итерации не растёт.
      */
     async function place(opts) {
       const batch = opts.batch;
@@ -504,20 +626,24 @@
       const isFb = !!type.fb;
       const deck = type.deck ? DECK_BY_KEY[type.deck] : null;
 
+      // Раскрытую историю сначала сворачиваем: новая картинка встаёт в обычную карточку.
+      if ((await getChar(batch.id, ch.id)).open) await setHistory(batch, ch.id, false);
       // Реестр и зоны читаем разом. Если зоны нет, на доске ничего не меняется.
-      const [rec, zone, arZone, deckZone] = await Promise.all([
+      const [rec, zone, arZone, deckZone, deckIdx] = await Promise.all([
         getChar(batch.id, ch.id),
         zoneOf(isFb ? ui.fb : ui.pv, ch.name + (isFb ? ' → Feedback' : ' → превью')),
         zoneOf(ui.ar, ch.name + ' → архив'),
         deck ? zoneOf(batch.zones['deck:' + deck.key], deck.title) : Promise.resolve(null),
+        deck ? deckIndex(batch.id, deck.key, ch.id) : Promise.resolve(-1),
       ]);
       const at = new Date().toISOString();
       const by = opts.userName || '';
-      const v = isFb ? 0 : (rec.vers[type.id] || 0) + 1;
+      const redo = !isFb && !!opts.replace && !!rec.pv && rec.pv.type === type.id;
+      const v = isFb ? 0 : redo ? rec.pv.v : (rec.vers[type.id] || 0) + 1;
       const ref = isFb && rec.pv ? entryTitle(rec.pv) : '';
       const jira = type.primary ? normalizeJira(opts.jira, batch.jiraBase) : null;
       const link = jira && jira.url ? jira.url : null;
-      const entry = { type: type.id, v, ref, by, at, jira: jira ? jira.label : '', link: link || '' };
+      const entry = { n: redo ? rec.pv.n : (rec.seq || 0) + 1, type: type.id, v, ref, by, at, jira: jira ? jira.label : '', link: link || '' };
       const title = [MARK, batch.name, ch.name, entryTitle(entry)].join(' · ');
       const base = { dataUrl: opts.dataUrl, natural: opts.natural, title, link, color: type.color };
 
@@ -530,10 +656,9 @@
       const draws = [drawAt(box, zone.frame, Object.assign({ caption }, base))];
       let deckOverflow = false;
       if (deck) {
-        const k = deck.types.length;
-        const slot = deckSlot(deckZone.rect, deckGrid(deckZone.rect, k), charIdx * k + deck.types.indexOf(type.id));
+        const slot = deckSlot(deckZone.rect, deckGrid(deckZone.rect), deckIdx);
         deckOverflow = slot.overflow;
-        const dcap = esc(ch.name) + (k > 1 ? ' · ' + type.short : '');
+        const dcap = esc(ch.name) + (deck.types.length > 1 ? ' · ' + type.short : '');
         draws.push(drawAt(slot, deckZone.frame, Object.assign({}, base, { caption: dcap, color: '#555555' }, opts.deckDataUrl ? { dataUrl: opts.deckDataUrl } : {})));
       }
       const drawn = await Promise.allSettled(draws);
@@ -549,7 +674,7 @@
 
       // 2. Прежнее содержимое карточки уезжает в архив: старый фидбек всегда, старый коммит — когда пришёл новый коммит.
       const toArchive = [];
-      if (isFb) { if (rec.fb) toArchive.push(rec.fb); } else { if (rec.pv) toArchive.push(rec.pv); if (rec.fb) toArchive.push(rec.fb); }
+      if (isFb) { if (rec.fb) toArchive.push(rec.fb); } else if (!redo) { if (rec.pv) toArchive.push(rec.pv); if (rec.fb) toArchive.push(rec.fb); }
       const moves = toArchive.map((e, i) => moveToArchive(arZone.rect, rec.arch.length + i, e));
       rec.arch = rec.arch.concat(toArchive);
 
@@ -559,17 +684,18 @@
       if (isFb) {
         rec.fb = mine;
       } else {
+        if (redo) stale.push(rec.pv.img, rec.pv.cap); else rec.fb = null; // перезалив: старый файл убираем, фидбек к этой итерации остаётся
         rec.pv = mine;
-        rec.fb = null;
         rec.vers[type.id] = v;
         if (type.stage) { rec.cur = type.stage; if (by) rec.artists[type.stage] = by; }
         if (d) {
-          if (rec.deck[type.id]) stale.push(rec.deck[type.id].img, rec.deck[type.id].cap);
-          rec.deck[type.id] = { img: d.img, cap: d.cap };
+          if (rec.deck[deck.key]) stale.push(rec.deck[deck.key].img, rec.deck[deck.key].cap); // в секции остаётся только последний сабмит
+          rec.deck[deck.key] = { img: d.img, cap: d.cap, type: type.id };
         }
         if (jira) rec.jiraInput = String(opts.jira).trim();
       }
-      rec.status = STATUS_BY_ID[opts.statusAfter] ? opts.statusAfter : isFb ? 'fixes' : 'internal';
+      rec.seq = Math.max(rec.seq || 0, entry.n);
+      rec.status = STATUS_BY_ID[opts.statusAfter] ? opts.statusAfter : redo ? rec.status : isFb ? 'fixes' : 'internal';
 
       const tail = moves.concat([store.set(charKey(batch.id, ch.id), rec)], stale.map((id) => removeIds([id])));
       if (opts.sourceItemId) tail.push(removeIds([opts.sourceItemId]));
@@ -577,7 +703,7 @@
       const drawnOk = await refreshCard(batch, ch.id, rec, { status: true, stages: !isFb, pv: !isFb, fb: true, hist: true });
       if (!drawnOk) warnings.push('Картинка на месте, но оформление карточки обновилось не полностью.');
       return {
-        v, isFeedback: isFb, title: entryTitle(entry), cardImageId: card.img, deckTitle: deck ? deck.title : null,
+        v, isFeedback: isFb, replaced: redo, title: entryTitle(entry), cardImageId: card.img, deckTitle: deck ? deck.title : null,
         archived: toArchive.length, status: rec.status, warnings, charName: ch.name, typeLabel: type.label, rec,
       };
     }
@@ -638,12 +764,12 @@
 
     return {
       store, listBatches, getBatch, saveBatch, getChar, buildTestBatch, deleteBatch, place, setStatus, setArtists,
-      refreshCard, zoomToArchive, absRect, getItem, loadZoneRects, guessTarget, findButton, loadBatchesFull,
+      refreshCard, openStatusMenu, closeStatusMenu, setHistory, toggleHistory, collapseAll, zoomToArchive, absRect, getItem, loadZoneRects, guessTarget, findButton, loadBatchesFull,
     };
   }
 
   return {
-    VERSION, MARK, FORMAT, STATUSES, STATUS_BY_ID, STAGES, TYPES, TYPE_BY_ID, DECKS, DECK_BY_KEY, DEFAULT_CHARACTERS, L,
-    create, pickImages, isBotImage, normalizeJira, deckGrid, deckSlot, archiveSlot, fitSide, timeline, entryTitle, esc, ddmm,
+    VERSION, MARK, FORMAT, STATUSES, STATUS_BY_ID, STAGES, STAGE_COLS, TYPES, TYPE_BY_ID, DECKS, DECK_BY_KEY, DEFAULT_CHARACTERS, L,
+    create, pickImages, isBotImage, normalizeJira, deckGrid, deckSlot, archiveSlot, fitSide, timeline, pastSubmits, entryTitle, esc, ddmm,
   };
 });

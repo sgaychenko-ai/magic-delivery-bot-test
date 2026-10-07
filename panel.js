@@ -210,7 +210,7 @@
       b.textContent = t.label;
       b.style.setProperty('--chip', t.color);
       b.setAttribute('aria-pressed', 'false');
-      b.addEventListener('click', () => { state.typeId = t.id; if (t.primary && state.rec) $('jira').value = state.rec.jiraInput || ''; render(); });
+      b.addEventListener('click', () => { state.typeId = t.id; if (t.primary && state.rec) $('jira').value = state.rec.jiraInput || ''; setIter('new'); render(); });
       $('types-' + t.group).append(b);
     }
     $('statusAfter').add(new Option('Авто', ''));
@@ -236,6 +236,9 @@
     }
   }
 
+  const setIter = (v) => { document.querySelector('input[name="iter"][value="' + v + '"]').checked = true; };
+  const iterMode = () => document.querySelector('input[name="iter"]:checked').value;
+
   function fillArtists() {
     for (const st of SGG.STAGES) $('artist-' + st.id).value = (state.rec && state.rec.artists[st.id]) || '';
     const names = new Set(state.online.concat(state.user.name ? [state.user.name] : [], state.rec ? Object.values(state.rec.artists) : []).filter(Boolean));
@@ -257,18 +260,29 @@
     $('charSelect').value = state.charId || '';
     document.querySelectorAll('.chip').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.type === state.typeId)));
     $('jiraField').hidden = !(type && type.primary);
-    const auto = type ? SGG.STATUS_BY_ID[type.fb ? 'fixes' : 'internal'].label : '';
+    // Та же стадия, что сейчас в карточке: это новая итерация или перезалив текущей?
+    const same = !!(ch && type && rec && rec.pv && !type.fb && rec.pv.type === type.id);
+    $('iterBox').hidden = !same;
+    if (!same) setIter('new');
+    const redo = same && iterMode() === 'redo';
+    if (same) {
+      $('iterNew').textContent = 'Новая итерация — v' + (rec.pv.v + 1);
+      $('iterRedo').textContent = 'Перезалить текущую v' + rec.pv.v;
+    }
+    const auto = !type ? '' : redo ? 'не менять' : SGG.STATUS_BY_ID[type.fb ? 'fixes' : 'internal'].label;
     $('statusAfter').options[0].textContent = auto ? 'Авто: ' + auto : 'Авто';
 
     let route = '';
     if (ch && type && rec) {
       if (type.fb) {
         route = 'Встанет в блок фидбека карточки «' + ch.name + '»' + (rec.pv ? ' — к ' + SGG.entryTitle(rec.pv) : '') + '.';
-        if (rec.fb) route += ' Прежний фидбек уйдёт в архив.';
+        if (rec.fb) route += ' Прежний фидбек уйдёт в историю.';
+      } else if (redo) {
+        route = 'Заменит в карточке «' + ch.name + '» файл ' + SGG.entryTitle(rec.pv) + '. Номер итерации не изменится.';
       } else {
         route = 'Встанет в карточку «' + ch.name + '» как ' + type.en + ' v' + ((rec.vers[type.id] || 0) + 1);
         route += type.deck ? ' и в «' + SGG.DECK_BY_KEY[type.deck].title + '».' : '.';
-        if (rec.pv) route += ' Текущая (' + SGG.entryTitle(rec.pv) + ') уйдёт в архив.';
+        if (rec.pv) route += ' Текущая (' + SGG.entryTitle(rec.pv) + ') уйдёт в историю.';
       }
     }
     $('route').textContent = route;
@@ -281,7 +295,8 @@
     const has = !!(ch && rec);
     $('statusSelect').disabled = !has || state.busy;
     $('saveArtists').disabled = !has || state.busy;
-    $('showArchive').disabled = !has;
+    $('showArchive').disabled = !has || state.busy;
+    $('showArchive').textContent = has && rec.open ? 'Свернуть историю на доске' : 'Раскрыть историю на доске';
     $('statusSelect').value = has ? rec.status : 'todo';
     $('statusSwatch').style.background = has ? SGG.STATUS_BY_ID[rec.status].fill : 'transparent';
     const tl = $('timeline');
@@ -318,21 +333,23 @@
     render();
     try {
       const t0 = performance.now(), took = state.current.took || 0;
+      try { const u = await board.getUserInfo(); state.user = { id: u.id, name: u.name || '' }; } catch (e) { /* остаётся прежнее имя */ }
       const res = await core.place({
         batch: state.batch, charId: state.charId, typeId: state.typeId,
         dataUrl: state.current.dataUrl, deckDataUrl: state.current.deckDataUrl, natural: state.current.natural,
-        jira: $('jira').value, userName: state.user.name, statusAfter: $('statusAfter').value,
+        jira: $('jira').value, userName: state.user.name, statusAfter: $('statusAfter').value, replace: iterMode() === 'redo',
         sourceItemId: state.current.kind === 'board' ? state.current.id : null,
       });
       remember('char:' + state.batch.id, state.charId);
       state.rec = res.rec;
-      let line = res.charName + ' · ' + res.title + ' — в карточке' + (res.deckTitle ? ' и в деке «' + res.deckTitle + '»' : '');
+      let line = res.charName + ' · ' + res.title + (res.replaced ? ' — перезалит в карточке' : ' — в карточке') + (res.deckTitle ? ' и в деке «' + res.deckTitle + '»' : '');
       if (res.archived) line += ', в архив ушло: ' + res.archived;
       line += ' · статус ' + SGG.STATUS_BY_ID[res.status].label;
       line += ' · взял за ' + took.toFixed(1) + ' с, разложил за ' + ((performance.now() - t0) / 1000).toFixed(1) + ' с';
       log(line, 'ok');
       for (const w of res.warnings) log(w, 'warn');
       $('statusAfter').value = '';
+      setIter('new');
       state.busy = false;
       fillArtists();
       finishCurrent();
@@ -352,14 +369,6 @@
     const res = SGG.pickImages(items, { uid: state.user.id, seen, requireFresh, now: Date.now() });
     if (res.take.length) enqueue(res.take.map((i) => ({ kind: 'board', id: i.id })));
     else if (diagOn() && res.why.some((w) => w !== 'картинка бота' && w !== 'уже видел' && w !== 'старая')) log('Диагностика: ' + source + ' — пропуск: ' + res.why.join(', '));
-  }
-
-  // Клик по плашке статуса на доске, когда панель уже открыта: переключаемся на этого персонажа.
-  async function onButton(items) {
-    if (!items || items.length !== 1 || items[0].type !== 'shape') return;
-    const hit = core.findButton(state.full, items[0].id);
-    if (!hit || hit.action !== 'status') return;
-    await openChar(hit.batch.id, hit.charId);
   }
 
   async function openChar(batchId, charId) {
@@ -390,11 +399,12 @@
   buildStatic();
   $('version').textContent = 'SGG Delivery Bot ' + SGG.VERSION + ' · песочница';
 
-  document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => showView(b.dataset.view)));
+  document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => { showView(b.dataset.view); if (b.dataset.view === 'Char') loadChar(); }));
   $('batchSelect').addEventListener('change', (e) => selectBatch(e.target.value).catch((err) => fail('Батч', err)));
   const onChar = async (e) => { state.charId = e.target.value || null; if (state.charId) remember('char:' + state.batch.id, state.charId); await loadChar(); };
   $('charSelect').addEventListener('change', onChar);
   $('charSelect2').addEventListener('change', onChar);
+  document.querySelectorAll('input[name="iter"]').forEach((r) => r.addEventListener('change', render));
   $('place').addEventListener('click', doPlace);
   $('skip').addEventListener('click', () => { log('Пропустил — картинка осталась как была.'); finishCurrent(); });
   $('takeSelected').addEventListener('click', takeSelected);
@@ -437,7 +447,24 @@
     render();
   });
   $('showArchive').addEventListener('click', async () => {
-    try { if (!(await core.zoomToArchive(state.batch, state.charId))) log('У этого персонажа пока нет прошлых версий.', 'warn'); } catch (e) { fail('Не показал архив', e); }
+    if (!state.rec || state.busy) return;
+    state.busy = true;
+    render();
+    try {
+      const res = await core.toggleHistory(state.batch, state.charId);
+      state.rec = res.rec;
+      if (!res.count) log('У этого персонажа пока нет прошлых сабмитов.', 'warn');
+      else {
+        const ui = state.batch.ui[state.charId];
+        const ends = (await Promise.all([core.getItem(ui.status), core.getItem(ui.fb)])).filter(Boolean);
+        if (ends.length) await board.viewport.zoomTo(ends);
+      }
+    } catch (e) { fail('Не раскрыл историю', e); }
+    state.busy = false;
+    render();
+  });
+  $('collapseAll').addEventListener('click', async () => {
+    try { const n = await core.collapseAll(state.batch); log(n ? 'Свернул историй: ' + n + '.' : 'Раскрытых историй нет.', 'ok'); await loadChar(); } catch (e) { fail('Не свернул', e); }
   });
 
   $('createBatch').addEventListener('click', async () => {
@@ -515,7 +542,7 @@
     try { state.online = (await board.getOnlineUsers()).map((u) => u.name).filter(Boolean); } catch (e) { /* список подсказок не критичен */ }
     await loadBatches();
     board.ui.on('items:create', (e) => onImages('items:create', e.items, false));
-    board.ui.on('selection:update', (e) => { onImages('selection', e.items, true); onButton(e.items); });
+    board.ui.on('selection:update', (e) => onImages('selection', e.items, true));
     let data = null;
     try { data = await board.ui.getPanelData(); } catch (e) { /* открыли по иконке */ }
     if (state.batch) {
