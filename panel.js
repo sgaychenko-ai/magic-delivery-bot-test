@@ -245,6 +245,7 @@
   // ---------- форма ----------
   function buildStatic() {
     for (const t of SGG.TYPES) {
+      if (t.group === 'none') continue; // служебный тип, в форме не выбирается
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'chip';
@@ -423,12 +424,15 @@
       row.style.setProperty('--chip', t.color || '#888');
       if (t.tint) row.style.background = t.tint;
       const a = document.createElement('b');
-      a.textContent = SGG.entryTitle(e);
+      a.textContent = SGG.entryTitle(e) + (e.sum ? ' — ' + e.sum : '');
       const b = document.createElement('span');
       b.textContent = SGG.ddmm(e.at) + (e.by ? ' · ' + e.by : '') + (e.where === 'card' ? ' · в карточке' : ' · в архиве');
       row.append(a, b);
       row.addEventListener('click', async () => {
-        try { const it = await core.getItem(e.img); if (it) await board.viewport.zoomTo(it); else log('Этой картинки уже нет на доске.', 'warn'); } catch (err) { fail('Не показал', err); }
+        try {
+          const items = (await Promise.all(SGG.bundleIds(e).map((id) => core.getItem(id)))).filter(Boolean);
+          if (items.length) await board.viewport.zoomTo(items); else log('Этого уже нет на доске.', 'warn');
+        } catch (err) { fail('Не показал', err); }
       });
       tl.append(row);
     }
@@ -472,12 +476,17 @@
 
   // ---------- события доски ----------
   // Новую картинку ловим двумя путями: событием создания и тем, что Miro сам выделяет только что добавленное.
-  function onImages(source, items, requireFresh) {
+  async function onImages(source, items, requireFresh) {
     if (!state.batch) return;
     if (!(items || []).some((i) => i.type === 'image')) return;
     const res = SGG.pickImages(items, { uid: state.user.id, seen, requireFresh, now: Date.now() });
-    if (res.take.length) enqueue(res.take.map((i) => ({ kind: 'board', id: i.id })));
-    else if (diagOn() && res.why.some((w) => w !== 'картинка бота' && w !== 'уже видел' && w !== 'старая')) log('Диагностика: ' + source + ' — пропуск: ' + res.why.join(', '));
+    if (res.take.length) {
+      // Картинку, положенную прямо в ячейку фидбека, форма не забирает: её принимает плашка Feedback на карточке.
+      res.take.forEach((i) => seen.add(i.id));
+      const mine = [];
+      for (const i of res.take) { let inCell = null; try { inCell = await core.feedbackCellAt(state.full, i); } catch (e) { /* считаем обычной доставкой */ } if (!inCell) mine.push(i); }
+      if (mine.length) enqueue(mine.map((i) => ({ kind: 'board', id: i.id })));
+    } else if (diagOn() && res.why.some((w) => w !== 'картинка бота' && w !== 'уже видел' && w !== 'старая')) log('Диагностика: ' + source + ' — пропуск: ' + res.why.join(', '));
   }
 
   async function openChar(batchId, charId) {

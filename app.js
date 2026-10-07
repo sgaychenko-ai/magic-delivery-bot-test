@@ -108,17 +108,49 @@
         if (loud.length) diag(source + ': пропуск — ' + res.why.join(', '));
         return;
       }
-      if (!(await batches(true)).length) { diag(source + ': на доске нет батча'); return; }
+      // Одну и ту же картинку Miro присылает двумя событиями подряд — отмечаем её сразу, до первого ожидания.
       res.take.forEach((i) => seen.add(i.id));
-      await openPanel({ itemIds: res.take.map((i) => i.id) });
+      const bs = await batches(true);
+      if (!bs.length) { res.take.forEach((i) => seen.delete(i.id)); diag(source + ': на доске нет батча'); return; }
+      // Картинку положили прямо в ячейку фидбека: форму доставки не показываем, а сразу спрашиваем на доске, чей это фидбек.
+      const rest = [];
+      let cellHit = null;
+      for (const i of res.take) { const hit = await core.feedbackCellAt(bs, i); if (hit) cellHit = hit; else rest.push(i); }
+      if (cellHit) await askFeedback(cellHit);
+      if (rest.length) await openPanel({ itemIds: rest.map((i) => i.id) });
     } catch (e) {
       console.error('[SGG bot]', e);
       diag('ошибка: ' + (e && e.message ? e.message : e));
     }
   }
 
-  // Кнопки на доске. Плашка статуса и плашки Sketch / Render раскрывают список прямо под собой; History раскрывает историю.
-  let menu = null; // открытый список: { batch, charId, phase|null, current, map, items, at, anchor, anchorId, timer }
+  // Кнопки на доске. Плашки статуса, Sketch / Render и Feedback раскрывают список прямо под собой; History раскрывает историю.
+  let menu = null; // открытый список: { batch, charId, kind: status|assign|fb, phase|null, current, map, items, at, anchor, anchorId, timer }
+
+  /** Выбрали строку в списке над ячейкой фидбека. → что написать во всплывающей строке. */
+  async function pickFeedback(m, pick) {
+    const name = m.batch.chars.find((c) => c.id === m.charId).name, ignore = m.items.map((i) => i.id);
+    if (pick === 'archive') {
+      const res = await core.archiveFeedback(m.batch, m.charId, ignore);
+      return name + (res.moved ? ' · фидбек ушёл в историю' : ' · в ячейке фидбека пусто');
+    }
+    const res = await core.takeFeedback(m.batch, m.charId, pick, (await me(true)).name, ignore);
+    if (!res.count) return res.cleared ? name + ' · фидбек снят: ячейка пустая' : 'В ячейке фидбека пусто: положи туда картинку или стикер';
+    return name + ' · ' + SGG.TYPE_BY_ID[pick].en + ': ' + res.sum;
+  }
+
+  /** Открывает список «чей фидбек» над ячейкой — когда в неё только что бросили картинку. */
+  let asking = false;
+  async function askFeedback(hit) {
+    if (asking) return;
+    asking = true;
+    try {
+      const anchor = await core.getItem(hit.batch.ui[hit.charId].fbh);
+      if (!anchor) return;
+      if (menu) await closeMenu(null);
+      await openMenuFor({ batch: hit.batch, charId: hit.charId, action: 'fb' }, anchor);
+    } catch (e) { console.error('[SGG bot]', e); } finally { asking = false; }
+  }
 
   async function closeMenu(pick) { // pick === null — закрыли, ничего не выбрав
     const m = menu;
@@ -128,7 +160,9 @@
     const jobs = [core.closeMenu(m.batch, m.charId, m.items)];
     const name = m.batch.chars.find((c) => c.id === m.charId).name, t0 = Date.now();
     let done = '';
-    if (pick !== null && pick !== m.current) { // список убирается и карточка перекрашивается одновременно
+    if (pick !== null && m.kind === 'fb') { // повторный выбор того же типа — «добрать то, что положили позже»
+      jobs.push(pickFeedback(m, pick).then((text) => { done = text; }));
+    } else if (pick !== null && pick !== m.current) { // список убирается и карточка перекрашивается одновременно
       if (m.phase) {
         jobs.push(core.setAssign(m.batch, m.charId, m.phase, pick, m.anchor));
         done = name + ' · ' + SGG.PHASES.find((p) => p.id === m.phase).label + ' → ' + (pick || 'никто');
@@ -144,7 +178,11 @@
   async function openMenuFor(hit, anchor) {
     const phase = hit.action.indexOf('as:') === 0 ? hit.action.slice(3) : null;
     let current, options;
-    if (phase) {
+    if (hit.action === 'fb') {
+      const rec = await core.getChar(hit.batch.id, hit.charId);
+      current = rec.fb ? rec.fb.type : '';
+      options = core.feedbackOptions(rec);
+    } else if (phase) {
       const got = await Promise.all([core.getChar(hit.batch.id, hit.charId), core.getTeam(hit.batch.id), me(true), onlineNames()]);
       current = (got[0].assign || {})[phase] || '';
       options = core.assignOptions(got[1], current, got[2].name, got[3]);
@@ -154,7 +192,7 @@
       options = core.statusOptions(current);
     }
     const res = await core.openMenu(hit.batch, hit.charId, anchor, options);
-    menu = { batch: hit.batch, charId: hit.charId, phase, current, map: res.map, items: res.items, at: Date.now(), anchor, anchorId: anchor.id, timer: setTimeout(() => closeMenu(null).catch(() => {}), 20000) };
+    menu = { batch: hit.batch, charId: hit.charId, kind: hit.action === 'fb' ? 'fb' : phase ? 'assign' : 'status', phase, current, map: res.map, items: res.items, at: Date.now(), anchor, anchorId: anchor.id, timer: setTimeout(() => closeMenu(null).catch(() => {}), 20000) };
   }
 
   async function onHistory(hit) {

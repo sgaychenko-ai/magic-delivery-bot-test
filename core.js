@@ -5,10 +5,10 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '0.3.3';
+  const VERSION = '0.4.0';
   const MARK = 'SGG-BOT';
   const COLLECTION = 'sgg-delivery';
-  const FORMAT = 4; // формат батча: 4 = карточки с назначениями по фазам
+  const FORMAT = 5; // формат батча: 5 = над ячейкой фидбека появилась плашка Feedback, ячейка стала больше
 
   // Статусы над персонажем — как на рабочей доске.
   const STATUSES = [
@@ -64,6 +64,8 @@
     { id: 'sketch', label: 'Скетч / WIP', en: 'Sketch / WIP', group: 'extra', stage: null, deck: null, short: 'WIP', color: '#888780' },
     { id: 'fb_lead', label: 'Фидбек лида', en: 'Lead feedback', group: 'fb', fb: 'lead', color: '#7F77DD', tint: '#EEEDFE' },
     { id: 'fb_client', label: 'Фидбек клиента', en: 'Client feedback', group: 'fb', fb: 'client', color: '#378ADD', tint: '#E6F1FB' },
+    // Фидбек, про который не сказали, чей он: в ячейке что-то лежало, а плашку Feedback не нажали. В панели не выбирается.
+    { id: 'fb_any', label: 'Фидбек', en: 'Feedback', group: 'none', fb: 'any', color: '#888780', tint: '#F4F4F2' },
   ];
   const TYPE_BY_ID = Object.fromEntries(TYPES.map((t) => [t.id, t]));
   const LEGACY_TYPES = ['color', 'render', 'pose', 'design', 'face', 'sketch'];
@@ -74,12 +76,12 @@
   // Размеры тестового батча (в единицах доски).
   const L = {
     titleH: 60, deckW: 920, deckGap: 60, deckHeaderH: 40, sideGap: 40,
-    cardW: 360, cardGap: 20, tagH: 30, nameH: 34, asH: 28, stageH: 38, stageGap: 4, pvH: 300, fbH: 150, histH: 28, gap: 6,
+    cardW: 360, cardGap: 20, tagH: 30, nameH: 34, asH: 28, stageH: 38, stageGap: 4, pvH: 300, fbHeadH: 28, fbH: 300, histH: 28, gap: 6,
     archGap: 3200, archHeadH: 36, archLabelH: 24, archCellH: 160, archCapH: 28,
   };
   const stageRows = () => Math.ceil(STAGES.length / STAGE_COLS);
   const stripHeight = () => stageRows() * L.stageH + (stageRows() - 1) * L.stageGap;
-  const cardHeight = () => L.tagH + L.nameH + L.asH + stripHeight() + L.pvH + L.fbH + L.histH + L.gap * 6;
+  const cardHeight = () => L.tagH + L.nameH + L.asH + stripHeight() + L.pvH + L.fbHeadH + L.fbH + L.histH + L.gap * 7;
 
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const pad2 = (n) => String(n).padStart(2, '0');
@@ -169,6 +171,44 @@
     return { left, top, w, h: L.archCellH, capH: L.archCapH };
   }
 
+  // Набор — фидбек, который положили в ячейку руками: картинка, стикеры, текст. Он ездит целиком и не меняет размер.
+  const isBundle = (e) => !!(e && e.items && e.items.length);
+  const bundleIds = (e) => [e.img, e.cap].concat(e.items || []).filter(Boolean);
+
+  /**
+   * Места в хранилище под якорем персонажа, сверху вниз. Обычные сабмиты — по два в ряд,
+   * набор занимает ряд целиком и столько высоты, сколько занимал в ячейке фидбека.
+   */
+  function archiveLayout(rect, entries) {
+    const gap = 8, w = (rect.w - gap) / 2, left = rect.x - rect.w / 2, out = [];
+    let top = rect.y + rect.h / 2 + gap, col = 0;
+    for (const e of entries) {
+      if (isBundle(e)) {
+        if (col) { top += L.archCellH + gap; col = 0; }
+        out.push({ left, top, w: rect.w, h: e.h || L.fbH, capH: 0 });
+        top += (e.h || L.fbH) + gap;
+      } else {
+        out.push({ left: left + col * (w + gap), top, w, h: L.archCellH, capH: L.archCapH });
+        if (++col === 2) { col = 0; top += L.archCellH + gap; }
+      }
+    }
+    return out;
+  }
+
+  /** Общий прямоугольник нескольких элементов доски. */
+  function bboxOf(objs) {
+    let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+    for (const o of objs) { const w = o.width || 0, h = o.height || 0; l = Math.min(l, o.x - w / 2); t = Math.min(t, o.y - h / 2); r = Math.max(r, o.x + w / 2); b = Math.max(b, o.y + h / 2); }
+    return { left: l, top: t, w: r - l, h: b - t };
+  }
+
+  /** «1 image, 2 notes» — что лежит в принятом фидбеке. */
+  function describe(objs) {
+    const n = { image: 0, note: 0, text: 0, item: 0 };
+    for (const o of objs) n[o.type === 'image' ? 'image' : o.type === 'sticky_note' ? 'note' : o.type === 'text' ? 'text' : 'item']++;
+    return Object.keys(n).filter((k) => n[k]).map((k) => n[k] + ' ' + k + (n[k] > 1 ? 's' : '')).join(', ');
+  }
+
   /** Вписать картинку в область с сохранением пропорций: задаём только одну сторону. */
   function fitSide(ratio, areaW, areaH) {
     const r = ratio > 0 && isFinite(ratio) ? ratio : 1;
@@ -256,11 +296,21 @@
     const t = rec.pv ? TYPE_BY_ID[rec.pv.type] : null;
     return { content: '', style: Object.assign({}, BASE, { fillColor: '#FFFFFF', borderColor: t ? t.color : '#D0D0D0', borderWidth: t ? 3 : 1, color: '#8C8C8C' }) };
   };
+  // Ячейка фидбека — место, куда кладут что угодно: картинку, стикеры, текст. Пустая подсказывает, что делать.
   const fbLook = (rec) => {
     const t = rec.fb ? TYPE_BY_ID[rec.fb.type] : null;
     return {
-      content: para(t ? '<strong>' + t.en + '</strong>' : 'Feedback'),
-      style: Object.assign({}, BASE, { textAlign: 'left', textAlignVertical: 'top', fillColor: t ? t.tint : '#FAFAFA', borderColor: t ? t.color : '#D0D0D0', borderWidth: t ? 2 : 1, color: t ? t.color : '#9A9A9A' }),
+      content: t ? '' : para('Put feedback here: image, sticky notes, text.') + para('Then press “Feedback” above.'),
+      style: Object.assign({}, BASE, { textAlign: 'left', textAlignVertical: 'top', fillColor: t ? t.tint : '#FAFAFA', borderColor: t ? t.color : '#D0D0D0', borderWidth: t ? 2 : 1, color: '#9A9A9A' }),
+    };
+  };
+  // Плашка над ячейкой: по ней бот принимает то, что лежит в ячейке, и на ней написано, чей фидбек и что в нём.
+  const fbHeadLook = (rec) => {
+    const t = rec.fb ? TYPE_BY_ID[rec.fb.type] : null;
+    if (!t) return { content: para('<strong>+ Feedback</strong> ▾'), style: Object.assign({}, BASE, { fontSize: 11, fillColor: '#FFFFFF', borderColor: '#D0D0D0', color: '#8C8C8C' }) };
+    return {
+      content: para('<strong>' + t.en + '</strong>' + (rec.fb.sum ? ' · ' + esc(rec.fb.sum) : '') + ' ▾'),
+      style: Object.assign({}, BASE, { fontSize: 11, fillColor: t.color, borderColor: t.color, color: '#FFFFFF' }),
     };
   };
   // Поле под прошлым сабмитом в раскрытой истории: рамка цвета стадии, у фидбека — ещё и подложка его цвета.
@@ -424,6 +474,8 @@
         t += L.histH + L.gap;
         shape(left, t, L.cardW, L.pvH, pvLook(blank), { ref: [ch.id, 'pv'] });
         t += L.pvH + L.gap;
+        shape(left, t, L.cardW, L.fbHeadH, fbHeadLook(blank), { ref: [ch.id, 'fbh'] });
+        t += L.fbHeadH + L.gap;
         shape(left, t, L.cardW, L.fbH, fbLook(blank), { ref: [ch.id, 'fb'] });
         shape(left, archTop + L.archHeadH + L.gap, L.cardW, L.archLabelH, { content: para(esc(ch.name)), style: Object.assign({}, BASE, { fillColor: '#F2F2F2', borderColor: '#D0D0D0', color: '#444444' }) }, { ref: [ch.id, 'ar'] });
       });
@@ -448,6 +500,7 @@
             else if (part.indexOf('as:') === 0) ui[cid].as[part.slice(3)] = it.id;
             else ui[cid][part] = it.id;
             if (part === 'status' || part === 'hist' || part.indexOf('as:') === 0) btn[it.id] = [cid, part];
+            if (part === 'fbh') btn[it.id] = [cid, 'fb'];
           }
           gen.push(it.id);
           onProgress(++done, jobs.length);
@@ -481,7 +534,7 @@
           if (open) { ids.push(...open); await store.remove(menuKey(batchId, ch.id)); }
           const rec = await store.get(charKey(batchId, ch.id));
           if (!rec) return;
-          for (const e of [rec.pv, rec.fb].concat(rec.arch || [], Object.values(rec.deck || {}))) if (e) ids.push(e.img, e.cap, e.bg);
+          for (const e of [rec.pv, rec.fb].concat(rec.arch || [], Object.values(rec.deck || {}))) if (e) ids.push(e.img, e.cap, e.bg, ...(e.items || []));
           ids.push(...(rec.cells || []), ...(rec.menu || []));
           await store.remove(charKey(batchId, ch.id));
         });
@@ -509,7 +562,7 @@
     }
 
     // ---------- карточка ----------
-    /** Перерисовывает части карточки под запись персонажа. parts: status, assign (true или id фазы), stages, pv, fb, hist. */
+    /** Перерисовывает части карточки под запись персонажа. parts: status, assign (true или id фазы), stages, pv, fb (ячейка и плашка фидбека), hist. */
     async function refreshCard(batch, charId, rec, parts) {
       const ui = batch.ui[charId];
       const want = [];
@@ -517,7 +570,7 @@
       if (parts.assign) for (const ph of PHASES) if (parts.assign === true || parts.assign === ph.id) want.push([ui.as[ph.id], assignLook(ph, rec)]);
       if (parts.stages) for (const st of STAGES) want.push([ui.st[st.id], stageLook(st, rec)]);
       if (parts.pv) want.push([ui.pv, pvLook(rec)]);
-      if (parts.fb) want.push([ui.fb, fbLook(rec)]);
+      if (parts.fb) want.push([ui.fb, fbLook(rec)], [ui.fbh, fbHeadLook(rec)]);
       if (parts.hist) want.push([ui.hist, histLook(rec)]);
       const got = await getMany(want.map((w) => w[0]));
       const res = await Promise.allSettled(want.map(([id, look]) => {
@@ -602,6 +655,124 @@
       return out;
     }
 
+    // ---------- фидбек: что лежит в ячейке, то и фидбек ----------
+    /** Всё, что лежит на доске. Один запрос: по нему бот находит, что люди положили в ячейку фидбека. */
+    async function readBoard() {
+      try { return (await board.get()) || []; } catch (e) { return []; }
+    }
+    const rectOf = (it) => ({ x: it.x, y: it.y, w: it.width, h: it.height });
+
+    /** Элементы, которые положили в ячейку руками: центр внутри ячейки, и это не часть карточки и не картинка бота. */
+    function collect(batch, charId, rec, cell, all, ignore) {
+      const ui = batch.ui[charId], skip = new Set(ignore || []);
+      for (const id of [ui.status, ui.name, ui.hist, ui.pv, ui.fbh, ui.fb, ui.ar].concat(Object.values(ui.as), Object.values(ui.st))) skip.add(id);
+      for (const e of [rec.pv, rec.fb].concat(rec.arch, Object.values(rec.deck))) if (e) { skip.add(e.img); skip.add(e.cap); skip.add(e.bg); }
+      for (const e of rec.arch) for (const id of e.items || []) skip.add(id);
+      const l = cell.x - cell.w / 2, r = cell.x + cell.w / 2, t = cell.y - cell.h / 2, b = cell.y + cell.h / 2;
+      return all.filter((it) => it && !skip.has(it.id) && !hasParent(it) && it.type !== 'frame' && it.type !== 'connector' && it.type !== 'group'
+        && isFinite(it.x) && isFinite(it.y) && it.x >= l && it.x <= r && it.y >= t && it.y <= b);
+    }
+
+    /** Запоминает в записи фидбека, что в нём лежит и как оно стоит относительно ячейки, — чтобы потом возить набор целиком. */
+    function seal(e, cell, found, byId) {
+      e.items = found.map((it) => it.id);
+      e.w = cell.w; e.h = cell.h;
+      const own = [e.img, e.cap].map((id) => byId.get(id)).filter(Boolean);
+      const objs = own.concat(found);
+      if (objs.length) { const bb = bboxOf(objs); e.dx = bb.left - (cell.x - cell.w / 2); e.dy = bb.top - (cell.y - cell.h / 2); }
+      e.sum = describe((e.img && byId.get(e.img) ? [byId.get(e.img)] : []).concat(found));
+      return e;
+    }
+
+    /** Переносит набор целиком: левый верхний угол его ячейки встаёт в точку (left, top). → запущенные обновления. */
+    function moveBundle(got, e, left, top) {
+      const objs = bundleIds(e).map((id) => got.get(id)).filter(Boolean);
+      if (!objs.length) return [];
+      const bb = bboxOf(objs), dx = left + (e.dx || 0) - bb.left, dy = top + (e.dy || 0) - bb.top;
+      return objs.map((it) => { it.x += dx; it.y += dy; return it.sync(); });
+    }
+
+    /** Отправляет запись в хранилище на её место. got — уже прочитанные элементы (id → элемент). */
+    function stow(got, arRect, rec, e) {
+      const slot = archiveLayout(arRect, rec.arch)[rec.arch.indexOf(e)];
+      if (isBundle(e)) return Promise.allSettled(moveBundle(got, e, slot.left, slot.top));
+      return moveInto(inset(slot, 4), e);
+    }
+
+    const feedbackOptions = (rec) => {
+      const cur = rec.fb ? rec.fb.type : '';
+      const out = ['fb_client', 'fb_lead'].map((id) => ({ value: id, label: TYPE_BY_ID[id].en, fill: TYPE_BY_ID[id].tint, mark: id === cur }));
+      if (rec.fb) out.push({ value: 'archive', label: '→ Move to history', fill: '#F2F2F2' });
+      return out;
+    };
+
+    /**
+     * Принимает как фидбек всё, что лежит в ячейке: картинки, стикеры, текст. Ничего не перезаливается и не двигается.
+     * Повторное нажатие добирает то, что положили позже, и может поменять, чей это фидбек.
+     * → { count, sum, fresh, rec }; count 0 — в ячейке пусто.
+     */
+    async function takeFeedback(batch, charId, typeId, userName, ignore) {
+      const type = TYPE_BY_ID[typeId];
+      if (!type || !type.fb) throw new Error('Нет такого типа фидбека.');
+      const ui = batch.ui[charId];
+      const rec = await getChar(batch.id, charId);
+      if (rec.open) await setHistory(batch, charId, false, rec); // ячейка должна стоять на своём месте
+      const [cellItem, all, open] = await Promise.all([getItem(ui.fb), readBoard(), store.get(menuKey(batch.id, charId))]);
+      if (!cellItem) throw new Error('Ячейка фидбека не найдена на доске — похоже, её удалили.');
+      const cell = rectOf(cellItem), byId = new Map(all.map((it) => [it.id, it]));
+      const found = collect(batch, charId, rec, cell, all, (ignore || []).concat(open || [])); // строки раскрытого списка — не фидбек
+      const keepsImage = !!(rec.fb && rec.fb.img && byId.get(rec.fb.img));
+      if (!found.length && !keepsImage) {
+        if (!rec.fb) return { count: 0, rec };
+        rec.fb = null; // фидбек убрали из ячейки руками
+        await Promise.all([store.set(charKey(batch.id, charId), rec), refreshCard(batch, charId, rec, { fb: true })]);
+        return { count: 0, cleared: true, rec };
+      }
+      const fresh = !rec.fb;
+      const e = rec.fb || { n: (rec.seq || 0) + 1, v: 0, ref: rec.pv ? entryTitle(rec.pv) : '', by: userName || '', at: new Date().toISOString() };
+      e.type = type.id;
+      seal(e, cell, found, byId);
+      rec.fb = e;
+      rec.seq = Math.max(rec.seq || 0, e.n);
+      if (fresh) rec.status = 'fixes';
+      const jobs = [store.set(charKey(batch.id, charId), rec), refreshCard(batch, charId, rec, { status: fresh, fb: true })];
+      if (fresh && userName) jobs.push(addToTeam(batch.id, userName).catch(() => null));
+      await Promise.all(jobs);
+      return { count: found.length + (keepsImage ? 1 : 0), sum: e.sum, fresh, title: entryTitle(e), rec };
+    }
+
+    /** Убирает текущий фидбек из ячейки в историю, не дожидаясь нового сабмита. → { moved, rec } */
+    async function archiveFeedback(batch, charId, ignore) {
+      const ui = batch.ui[charId];
+      const rec = await getChar(batch.id, charId);
+      if (rec.open) await setHistory(batch, charId, false, rec);
+      const [cellItem, ar, all, open] = await Promise.all([getItem(ui.fb), getItem(ui.ar), readBoard(), store.get(menuKey(batch.id, charId))]);
+      if (!cellItem || !ar) throw new Error('Ячейка фидбека или хранилище не найдены на доске — похоже, их удалили.');
+      const cell = rectOf(cellItem), byId = new Map(all.map((it) => [it.id, it]));
+      const found = collect(batch, charId, rec, cell, all, (ignore || []).concat(open || []));
+      const e = rec.fb || (found.length ? { n: (rec.seq || 0) + 1, type: 'fb_any', v: 0, ref: rec.pv ? entryTitle(rec.pv) : '', by: '', at: new Date().toISOString() } : null);
+      if (!e) return { moved: 0, rec };
+      seal(e, cell, found, byId);
+      rec.fb = null;
+      const has = isBundle(e) || !!(e.img && byId.get(e.img));
+      if (has) { rec.arch.push(e); rec.seq = Math.max(rec.seq || 0, e.n); }
+      await Promise.all([has ? stow(byId, rectOf(ar), rec, e) : null, store.set(charKey(batch.id, charId), rec), refreshCard(batch, charId, rec, { fb: true, hist: true })]);
+      return { moved: has ? 1 : 0, title: entryTitle(e), rec };
+    }
+
+    /** Картинка лежит в ячейке фидбека какого-то персонажа? → { batch, charId } | null. Такую форма доставки не спрашивает. */
+    async function feedbackCellAt(batches, item) {
+      if (!item || hasParent(item)) return null;
+      for (const b of batches || []) {
+        const got = await getMany(b.chars.map((c) => b.ui[c.id].fb));
+        for (const ch of b.chars) {
+          const c = got.get(b.ui[ch.id].fb);
+          if (c && Math.abs(item.x - c.x) <= c.width / 2 && Math.abs(item.y - c.y) <= c.height / 2) return { batch: b, charId: ch.id };
+        }
+      }
+      return null;
+    }
+
     // ---------- раскладка ----------
     /**
      * Место персонажа в секции деки. Первый сабмит персонажа занимает следующее свободное место, дальше оно за ним закреплено.
@@ -665,7 +836,6 @@
       await Promise.allSettled(jobs);
       return [img, cap].filter(Boolean);
     }
-    const moveToArchive = (arRect, index, entry) => moveInto(inset(archiveSlot(arRect, index), 4), entry);
 
     /** Ставит уже прочитанные картинку и подпись в прямоугольник box; возвращает запущенные обновления. */
     function placeInto(got, box, entry) {
@@ -698,37 +868,43 @@
       if (!!rec.open === !!open) return { open: !!rec.open, count: rec.arch.length, rec, focus: [] };
       const past = pastSubmits(rec);
       if (open && !past.length) return { open: false, count: 0, rec, focus: [] };
-      const current = [ui.pv, rec.pv && rec.pv.img, rec.pv && rec.pv.cap, ui.fb, rec.fb && rec.fb.img, rec.fb && rec.fb.cap].filter(Boolean);
-      const got = await getMany(current.concat(...rec.arch.map((e) => [e.img, e.cap, e.bg]), [ui.hist, ui.ar], rec.cells || []));
+      // Текущее содержимое карточки: превью, плашка и ячейка фидбека и всё, что бот принял как фидбек.
+      const current = [ui.pv, rec.pv && rec.pv.img, rec.pv && rec.pv.cap, ui.fbh, ui.fb].concat(rec.fb ? bundleIds(rec.fb) : []).filter(Boolean);
+      const got = await getMany(current.concat(...rec.arch.map((e) => [e.img, e.cap, e.bg].concat(e.items || [])), [ui.hist, ui.ar], rec.cells || []));
       const jobs = [];
-      const fresh = []; // сабмиты, которым поле создано только что: их картинки надо поднять над полем
+      const fresh = []; // сабмиты, которым поле создано только что: [запись, поле]
       const shiftCurrent = (dy) => current.forEach((id) => { const it = got.get(id); if (it) { it.y += dy; jobs.push(it.sync()); } });
-      // Поле под сабмитом создаётся один раз и дальше ездит вместе с картинкой: раскрыли — в карточку, свернули — в хранилище.
+      // Поле под сабмитом создаётся один раз и дальше ездит вместе с ним: раскрыли — в карточку, свернули — в хранилище.
       const field = (e, x, y, w, h) => {
         const bg = e.bg ? got.get(e.bg) : null;
         if (bg) { bg.x = x; bg.y = y; bg.width = w; bg.height = h; jobs.push(bg.sync()); return; }
-        jobs.push(board.createShape({ shape: 'rectangle', content: '', x, y, width: w, height: h, style: pastLook(e) }).then((it) => { e.bg = it.id; fresh.push(e); }));
+        jobs.push(board.createShape({ shape: 'rectangle', content: '', x, y, width: w, height: h, style: pastLook(e) }).then((it) => { e.bg = it.id; fresh.push([e, it]); }));
       };
       if (open) {
         const pv = got.get(ui.pv);
         if (!pv) throw new Error('Превью персонажа не найдено на доске — похоже, его удалили.');
-        const stepY = pv.height + L.gap, shift = past.length * stepY, top0 = pv.y - pv.height / 2, pad = 8, x0 = pv.x, y0 = pv.y;
-        const box0 = { left: pv.x - pv.width / 2 + pad, w: pv.width - pad * 2, h: pv.height - pad * 2, capH: 30 };
-        shiftCurrent(shift);
-        past.forEach((e, i) => {
-          field(e, x0, y0 + i * stepY, pv.width, pv.height);
-          jobs.push(...placeInto(got, Object.assign({ top: top0 + i * stepY + pad }, box0), e));
+        const pad = 8, x0 = pv.x, w0 = pv.width, h0 = pv.height;
+        let top = pv.y - pv.height / 2;
+        const top0 = top;
+        past.forEach((e) => {
+          const h = isBundle(e) ? e.h || h0 : h0; // набор занимает столько же, сколько занимал в ячейке фидбека
+          field(e, x0, top + h / 2, w0, h);
+          if (isBundle(e)) jobs.push(...moveBundle(got, e, x0 - w0 / 2, top));
+          else jobs.push(...placeInto(got, { left: x0 - w0 / 2 + pad, top: top + pad, w: w0 - pad * 2, h: h0 - pad * 2, capH: 30 }, e));
+          top += h + L.gap;
         });
-        rec.open = true; rec.shift = shift;
+        shiftCurrent(top - top0);
+        rec.open = true; rec.shift = top - top0;
       } else {
         const ar = got.get(ui.ar);
         if (!ar) throw new Error('Хранилище прошлых сабмитов не найдено на доске — похоже, его удалили.');
-        const arRect = { x: ar.x, y: ar.y, w: ar.width, h: ar.height };
+        const slots = archiveLayout({ x: ar.x, y: ar.y, w: ar.width, h: ar.height }, rec.arch);
         shiftCurrent(-(rec.shift || 0));
         rec.arch.forEach((e, i) => {
-          const slot = archiveSlot(arRect, i);
+          const slot = slots[i];
           if (e.bg && got.get(e.bg)) field(e, slot.left + slot.w / 2, slot.top + slot.h / 2, slot.w, slot.h);
-          jobs.push(...placeInto(got, inset(slot, 4), e));
+          if (isBundle(e)) jobs.push(...moveBundle(got, e, slot.left, slot.top));
+          else jobs.push(...placeInto(got, inset(slot, 4), e));
         });
         (rec.cells || []).forEach((id) => { const it = got.get(id); if (it) jobs.push(board.remove(it)); }); // рамки из версий до 0.3.1
         rec.open = false; rec.shift = 0; rec.cells = [];
@@ -740,10 +916,15 @@
       if (!creating) jobs.push(store.set(charKey(batch.id, charId), rec));
       await Promise.allSettled(jobs);
       if (creating) {
-        // Новое поле Miro кладёт поверх всего — поднимаем над ним картинку и подпись. Нужно один раз на сабмит.
+        // Новое поле Miro кладёт поверх всего. У обычного сабмита поднимаем над полем картинку и подпись;
+        // у набора порядок слоёв трогать нельзя (стикер должен остаться над картинкой) — там поле уходит под низ.
         const tail = [store.set(charKey(batch.id, charId), rec)];
-        const lift = [].concat(...fresh.map((e) => [got.get(e.img), got.get(e.cap)])).filter(Boolean);
+        const lift = [].concat(...fresh.filter((f) => !isBundle(f[0])).map((f) => [got.get(f[0].img), got.get(f[0].cap)])).filter(Boolean);
         if (lift.length) tail.push(Promise.resolve().then(() => board.bringToFront(lift)).catch(() => null));
+        for (const f of fresh.filter((x) => isBundle(x[0]))) {
+          const objs = bundleIds(f[0]).map((id) => got.get(id)).filter(Boolean);
+          tail.push(Promise.resolve().then(() => board.sendToBack(f[1])).catch(() => board.bringToFront(objs)).catch(() => null));
+        }
         await Promise.allSettled(tail);
       }
       return { open: rec.open, count: rec.arch.length, rec, focus: [hist, got.get(ui.fb)].filter(Boolean) };
@@ -775,14 +956,23 @@
       // Раскрытую историю сначала сворачиваем: новая картинка встаёт в обычную карточку.
       const before = await getChar(batch.id, ch.id);
       if (before.open) await setHistory(batch, ch.id, false, before);
-      // Реестр и зоны читаем разом. Если зоны нет, на доске ничего не меняется.
-      const [rec, zone, arZone, deckZone, deckIdx] = await Promise.all([
+      // Перезалив не трогает фидбек, поэтому ячейку фидбека для него читать не нужно.
+      const sweep = !(!isFb && !!opts.replace && !!before.pv && before.pv.type === type.id);
+      // Реестр, зоны и содержимое доски читаем разом. Если зоны нет, на доске ничего не меняется.
+      const [rec, zone, arZone, deckZone, deckIdx, fbCell, all, openMenuIds] = await Promise.all([
         before.open ? getChar(batch.id, ch.id) : Promise.resolve(before),
         zoneOf(isFb ? ui.fb : ui.pv, ch.name + (isFb ? ' → Feedback' : ' → превью')),
         zoneOf(ui.ar, ch.name + ' → архив'),
         deck ? zoneOf(batch.zones['deck:' + deck.key], deck.title) : Promise.resolve(null),
         deck ? deckIndex(batch.id, deck.key, ch.id) : Promise.resolve(-1),
+        sweep && !isFb ? getItem(ui.fb) : Promise.resolve(null),
+        sweep ? readBoard() : Promise.resolve([]),
+        sweep ? store.get(menuKey(batch.id, ch.id)) : Promise.resolve(null),
       ]);
+      // Что люди положили в ячейку фидбека руками — оно принадлежит текущему фидбеку, даже если плашку не нажали.
+      const cell = isFb ? zone.rect : fbCell ? rectOf(fbCell) : null;
+      const byId = new Map(all.map((it) => [it.id, it]));
+      const inCell = sweep && cell ? collect(batch, ch.id, rec, cell, all, openMenuIds) : [];
       const at = new Date().toISOString();
       const by = opts.userName || '';
       const redo = !isFb && !!opts.replace && !!rec.pv && rec.pv.type === type.id;
@@ -798,8 +988,8 @@
       if (jira) caption += ' · ' + (link ? '<a href="' + esc(link) + '">' + esc(jira.label) + '</a>' : esc(jira.label));
 
       // 1. Новая картинка в карточке (превью или блок фидбека) и копия в деке — одновременно.
-      const r = zone.rect, pad = 8, padTop = isFb ? 20 : pad, capH = 30;
-      const box = { left: r.x - r.w / 2 + pad, top: r.y - r.h / 2 + padTop, w: r.w - pad * 2, h: r.h - padTop - pad, capH };
+      const r = zone.rect, pad = 8, capH = 30;
+      const box = { left: r.x - r.w / 2 + pad, top: r.y - r.h / 2 + pad, w: r.w - pad * 2, h: r.h - pad * 2, capH };
       const draws = [drawAt(box, zone.frame, Object.assign({ caption }, base))];
       let deckOverflow = false;
       if (deck) {
@@ -821,12 +1011,36 @@
 
       // 2. Прежнее содержимое карточки уезжает в архив: старый фидбек всегда, старый коммит — когда пришёл новый коммит.
       const toArchive = [];
-      if (isFb) { if (rec.fb) toArchive.push(rec.fb); } else if (!redo) { if (rec.pv) toArchive.push(rec.pv); if (rec.fb) toArchive.push(rec.fb); }
-      const moves = toArchive.map((e, i) => moveToArchive(arZone.rect, rec.arch.length + i, e));
+      let mineItems = [];
+      if (isFb) {
+        // Новый фидбек через форму: прежний уезжает со своими стикерами, а то, что положили в ячейку после него, остаётся новому.
+        // Пустую запись (всё убрали руками) в историю не кладём.
+        const alive = (e) => isBundle(e) || !!(e.img && byId.get(e.img));
+        if (rec.fb) {
+          const had = new Set(rec.fb.items || []);
+          if (alive(seal(rec.fb, cell, inCell.filter((it) => had.has(it.id)), byId))) toArchive.push(rec.fb);
+          mineItems = inCell.filter((it) => !had.has(it.id));
+        } else mineItems = inCell;
+      } else if (!redo) {
+        if (rec.pv) toArchive.push(rec.pv);
+        if (rec.fb && !cell) toArchive.push(rec.fb);
+        else if (rec.fb) { seal(rec.fb, cell, inCell, byId); if (isBundle(rec.fb) || (rec.fb.img && byId.get(rec.fb.img))) toArchive.push(rec.fb); }
+        else if (inCell.length) {
+          // В ячейке что-то лежало, а плашку Feedback не нажали: уходит в историю как фидбек без автора, перед новым сабмитом.
+          toArchive.push(seal({ n: entry.n, type: 'fb_any', v: 0, ref: rec.pv ? entryTitle(rec.pv) : '', by: '', at }, cell, inCell, byId));
+          entry.n += 1;
+        }
+      }
       rec.arch = rec.arch.concat(toArchive);
+      const moves = toArchive.map((e) => stow(byId, arZone.rect, rec, e));
 
       // 3. Запись персонажа.
       const mine = Object.assign({ img: card.img, cap: card.cap }, entry);
+      if (isFb && mineItems.length) { // стикеры из ячейки едут вместе с новой картинкой фидбека
+        mine.items = mineItems.map((it) => it.id);
+        mine.w = cell.w; mine.h = cell.h;
+        mine.sum = describe([{ type: 'image' }].concat(mineItems));
+      }
       const stale = [];
       if (isFb) {
         rec.fb = mine;
@@ -897,7 +1111,7 @@
     /** Переносит экран к архиву персонажа — это и есть «раскрыть историю». */
     async function zoomToArchive(batch, charId) {
       const rec = await getChar(batch.id, charId);
-      const ids = [batch.ui[charId].ar].concat(rec.arch.slice(-8).map((e) => e.img));
+      const ids = [batch.ui[charId].ar].concat(rec.arch.slice(-8).map((e) => e.img || (e.items || [])[0]));
       const items = (await Promise.all(ids.map((id) => getItem(id)))).filter(Boolean);
       if (items.length) await board.viewport.zoomTo(items);
       return rec.arch.length;
@@ -950,12 +1164,12 @@
 
     return {
       store, listBatches, getBatch, saveBatch, getChar, getTeam, setTeam, addToTeam, buildTestBatch, deleteBatch, place, setStatus, setAssign,
-      refreshCard, renameChar, syncNames, openMenu, closeMenu, statusOptions, assignOptions, setHistory, toggleHistory, collapseAll, zoomToArchive, absRect, getItem, loadZoneRects, guessTarget, findButton, loadBatchesFull,
+      refreshCard, renameChar, syncNames, takeFeedback, archiveFeedback, feedbackOptions, feedbackCellAt, openMenu, closeMenu, statusOptions, assignOptions, setHistory, toggleHistory, collapseAll, zoomToArchive, absRect, getItem, loadZoneRects, guessTarget, findButton, loadBatchesFull,
     };
   }
 
   return {
     VERSION, MARK, FORMAT, STATUSES, STATUS_BY_ID, STAGES, STAGE_COLS, PHASES, TYPES, TYPE_BY_ID, DECKS, DECK_BY_KEY, DEFAULT_CHARACTERS, L,
-    create, latestVersion, CHANNEL, plainText, pickImages, isBotImage, normalizeJira, shortName, phaseOfStage, deckGrid, deckSlot, archiveSlot, fitSide, timeline, pastSubmits, entryTitle, esc, ddmm,
+    create, latestVersion, CHANNEL, plainText, pickImages, isBotImage, normalizeJira, shortName, phaseOfStage, deckGrid, deckSlot, archiveSlot, archiveLayout, isBundle, bundleIds, fitSide, timeline, pastSubmits, entryTitle, esc, ddmm,
   };
 });

@@ -120,3 +120,5 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 .foot { margin-top: 12px; font-size: 11px; color: var(--muted); }
 
 .iter { background: var(--soft); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 12px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+
+.hint { margin: 6px 0 0; }
