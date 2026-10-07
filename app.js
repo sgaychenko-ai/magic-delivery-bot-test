@@ -29,10 +29,7 @@
   async function handle(source, items, requireFresh) {
     try {
       const all = items || [];
-      if (!all.some((i) => i.type === 'image')) {
-        if (source === 'items:create' && all.length) diag(source + ': ' + all.map((i) => i.type).join(', ').slice(0, 40));
-        return;
-      }
+      if (!all.some((i) => i.type === 'image')) return;
       const res = SGG.pickImages(all, { uid: await me(), seen, requireFresh, now: Date.now() });
       if (!res.take.length) {
         const loud = res.why.filter((w) => w !== 'картинка бота' && w !== 'уже видел' && w !== 'старая');

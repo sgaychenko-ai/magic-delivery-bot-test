@@ -5,7 +5,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '0.1.2';
+  const VERSION = '0.1.3';
   const MARK = 'SGG-BOT';
   const COLLECTION = 'sgg-delivery';
 
@@ -125,6 +125,16 @@
     return g.padTop + rows * (g.cellH + g.gap) + g.gap;
   }
 
+  /** Оборачивает шаг, чтобы в ошибке было видно, на чём именно споткнулись. */
+  async function step(label, fn) {
+    try { return await fn(); } catch (e) {
+      const err = new Error('[' + label + '] ' + (e && e.message ? e.message : String(e)));
+      err.stack = e && e.stack ? e.stack : err.stack;
+      throw err;
+    }
+  }
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
   async function inChunks(list, size, fn) {
     const out = [];
     for (let i = 0; i < list.length; i += size) {
@@ -201,15 +211,21 @@
       const colH = L.tagH + 6 + L.nameH + 6 + ROWS.length * (L.cellH + L.cellGap);
       const totalH = L.titleH + 40 + Math.max(deckH, colH);
 
-      let cx = 0, cy = 0;
-      try { const vp = await board.viewport.get(); cx = vp.x + vp.width / 2; cy = vp.y + vp.height / 2; } catch (e) { /* по центру доски */ }
-      try { const sp = await board.findEmptySpace({ x: cx, y: cy, width: totalW, height: totalH, offset: 200 }); cx = sp.x; cy = sp.y; } catch (e) { /* как есть */ }
-      const ox = cx - totalW / 2, oy = cy - totalH / 2;
+      // Место: правее всего, что уже лежит на доске, чтобы ничего не накрыть. Пустая доска — по центру экрана.
+      let ox = -totalW / 2, oy = -totalH / 2;
+      try { const vp = await board.viewport.get(); ox = vp.x + vp.width / 2 - totalW / 2; oy = vp.y + vp.height / 2 - totalH / 2; } catch (e) { /* центр доски */ }
+      try {
+        const top = (await board.get()).filter((i) => i && !hasParent(i) && isFinite(i.x) && isFinite(i.y) && i.width > 0);
+        if (top.length) {
+          ox = Math.max(...top.map((i) => i.x + i.width / 2)) + 600;
+          oy = Math.min(...top.map((i) => i.y - (i.height || 0) / 2));
+        }
+      } catch (e) { /* остаёмся по центру экрана */ }
 
       const jobs = []; // { kind, props, zone? }
       const shape = (left, top, w, h, content, style, zone) => jobs.push({
         kind: 'shape', zone,
-        props: { shape: 'rectangle', content: content ? '<p>' + esc(content) + '</p>' : '', x: left + w / 2, y: top + h / 2, width: w, height: h, style },
+        props: { shape: 'rectangle', content: content ? '<p>' + esc(content) + '</p>' : '', x: left + w / 2, y: top + h / 2, width: w, height: h, style: Object.assign({}, style) },
       });
       const dark = { fillColor: '#1f1f1f', color: '#ffffff', fontSize: 18, textAlign: 'center', textAlignVertical: 'middle', borderColor: '#1f1f1f', borderWidth: 1 };
       const grey = { fillColor: '#8c8c8c', color: '#ffffff', fontSize: 14, textAlign: 'center', textAlignVertical: 'middle', borderColor: '#8c8c8c', borderWidth: 1 };
@@ -241,20 +257,34 @@
 
       const zones = {}, gen = [];
       let done = 0;
-      const made = await inChunks(jobs, 6, async (j) => {
-        const it = j.kind === 'frame' ? await board.createFrame(j.props) : await board.createShape(j.props);
-        if (j.zone) zones[j.zone] = it.id;
-        gen.push(it.id);
-        onProgress(++done, jobs.length);
-        return it;
-      });
+      const createOne = (j) => (j.kind === 'frame' ? board.createFrame(j.props) : board.createShape(j.props));
+      try {
+        const made = await inChunks(jobs, 4, async (j, n) => {
+          const label = 'создание ' + j.kind + ' «' + (j.zone || j.props.title || 'оформление') + '»';
+          let it;
+          try { it = await createOne(j); } catch (first) {
+            await pause(600); // одна повторная попытка: Miro иногда отбивает запрос под нагрузкой
+            it = await step(label, () => createOne(j));
+          }
+          if (!it || !it.id) throw new Error('[' + label + '] Miro не вернул созданный элемент');
+          if (j.zone) zones[j.zone] = it.id;
+          gen.push(it.id);
+          onProgress(++done, jobs.length);
+          return it;
+        });
 
-      const batch = { id, name, jiraBase: '', chars, zones, v: 1 };
-      await saveBatch(batch);
-      await store.set('gen:' + id, gen);
-      await store.set('batches', (await listBatches()).concat([{ id, name }]));
-      try { await board.viewport.zoomTo(made); } catch (e) { /* не критично */ }
-      return batch;
+        const batch = { id, name, jiraBase: '', chars, zones, v: 1 };
+        await step('запись батча в хранилище доски', () => saveBatch(batch));
+        await step('запись списка элементов', () => store.set('gen:' + id, gen));
+        await step('запись списка батчей', async () => store.set('batches', (await listBatches()).concat([{ id, name }])));
+        try { await board.viewport.zoomTo(made[0]); } catch (e) { /* не критично */ }
+        return batch;
+      } catch (e) {
+        // Не оставляем на доске половину батча.
+        await inChunks(gen.slice(), 4, (gid) => removeIds([gid]));
+        try { await store.remove('b:' + id); await store.remove('gen:' + id); } catch (e2) { /* нечего чистить */ }
+        throw e;
+      }
     }
 
     /** Убирает с доски всё, что создал бот для батча: зоны, картинки, подписи, записи реестра. */

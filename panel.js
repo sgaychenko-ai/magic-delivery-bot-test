@@ -26,7 +26,12 @@
     $('log').prepend(el);
     while ($('log').children.length > 6) $('log').lastChild.remove();
   }
-  const fail = (what, e) => { console.error('[SGG bot]', e); log(what + ': ' + (e && e.message ? e.message : String(e)), 'err'); };
+  // В красной строке — что сломалось и где: первые строки стека нужны, чтобы найти место без консоли.
+  const fail = (what, e) => {
+    console.error('[SGG bot]', e);
+    const where = e && e.stack ? String(e.stack).split('\n').slice(1, 5).map((l) => l.trim().replace(/^at /, '').replace(/https?:\/\/[^/]+\//g, '')).join(' ← ') : '';
+    log(what + ': ' + (e && e.message ? e.message : String(e)) + (where ? ' · ' + where.slice(0, 420) : ''), 'err');
+  };
 
   function showView(name) {
     for (const v of ['Empty', 'Delivery', 'Setup']) $('view' + v).hidden = v !== name;
