@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SGG Delivery Bot</title>
-    <link rel="stylesheet" href="panel.css?v=0.5.0" />
+    <link rel="stylesheet" href="panel.css?v=0.6.0" />
     <script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
-    <script src="core.js?v=0.5.0"></script>
+    <script src="core.js?v=0.6.0"></script>
   </head>
   <body>
     <div id="stale" class="legacy" hidden></div>
@@ -17,8 +17,6 @@
       <button type="button" data-view="Setup">Батч</button>
     </nav>
     <select id="batchSelect" class="batch-select" aria-label="Батч" hidden></select>
-
-    <!-- Нет батча на доске -->
     <section id="viewEmpty" class="view" hidden>
       <h2>На этой доске ещё нет батча</h2>
       <p class="muted">Бот построит тестовую секцию: Comparison Deck слева, карточки персонажей справа, под ними архив версий. Рабочие доски он не трогает.</p>
@@ -38,8 +36,6 @@
       <button id="cancelNew" class="secondary" type="button" hidden>Назад</button>
       <div id="createProgress" class="progress" hidden><i></i></div>
     </section>
-
-    <!-- Доставка -->
     <section id="viewDelivery" class="view" hidden>
       <div id="drop" class="drop" tabindex="0">
         <img id="thumb" alt="" hidden />
@@ -54,8 +50,6 @@
         <button id="takeSelected" class="link" type="button">Взять выделенные на доске</button>
         <span id="queueInfo" class="muted"></span>
       </div>
-
-      <!-- Несколько картинок сразу: список, у каждой персонаж и стадия -->
       <div id="batchBox" class="batchbox" hidden>
         <div class="batch-head"><b id="batchTitle"></b><button id="batchClear" class="link" type="button">Очистить список</button></div>
         <div class="batch-all">
@@ -66,14 +60,12 @@
         <p id="batchNote" class="muted small"></p>
         <button id="placeAll" class="primary" type="button" disabled>Разложить всё</button>
       </div>
-
       <div id="single">
       <label class="field">
         <span>Персонаж</span>
         <select id="charSelect"></select>
       </label>
       <p id="guessNote" class="guess small" hidden></p>
-
       <div class="field">
         <span>Стадия</span>
         <div id="types-stage" class="chips"></div>
@@ -87,32 +79,25 @@
         <div id="types-fb" class="chips"></div>
         <p class="muted small hint">Проще без формы: положи картинку и стикеры в ячейку фидбека на карточке и нажми «Feedback» над ней.</p>
       </div>
-
       <div id="iterBox" class="iter" hidden>
         <label><input type="radio" name="iter" value="new" checked /> <span id="iterNew">Новая итерация</span></label>
         <label><input type="radio" name="iter" value="redo" /> <span id="iterRedo">Перезалить текущую</span></label>
       </div>
-
       <label id="jiraField" class="field" hidden>
         <span>Задача в Jira (ссылка или ключ)</span>
         <input id="jira" type="text" placeholder="https://…/browse/SGG-123" />
       </label>
-
       <label class="field">
         <span>Статус после доставки</span>
         <select id="statusAfter"></select>
       </label>
-
       <p id="route" class="route muted"></p>
-
       <div class="actions">
         <button id="place" class="primary" type="button" disabled>Разложить</button>
         <button id="skip" class="secondary" type="button" disabled>Пропустить</button>
       </div>
       </div>
     </section>
-
-    <!-- Персонаж -->
     <section id="viewChar" class="view" hidden>
       <label class="field">
         <span>Персонаж</span>
@@ -134,8 +119,6 @@
       <div id="timeline" class="timeline"></div>
       <button id="showArchive" class="secondary" type="button">Раскрыть историю на доске</button>
     </section>
-
-    <!-- Команда: кто на какой фазе -->
     <section id="viewTeam" class="view" hidden>
       <h2>Кто что делает</h2>
       <p class="muted small">Выбери художника — имя сразу появится на карточке. То же самое можно сделать на доске: клик по плашке Sketch или Render.</p>
@@ -150,8 +133,6 @@
       </div>
       <button id="saveTeam" class="secondary" type="button">Сохранить команду</button>
     </section>
-
-    <!-- Настройки батча -->
     <section id="viewSetup" class="view" hidden>
       <h2 id="setupTitle">Батч</h2>
       <label class="field">
@@ -159,7 +140,6 @@
         <input id="jiraBase" type="text" placeholder="https://jira.example.com" />
       </label>
       <button id="saveSetup" class="secondary" type="button">Сохранить</button>
-      <label class="check"><input id="diag" type="checkbox" /> Диагностика: показывать, какие события доски видит бот</label>
       <hr />
       <button id="showBatch" class="secondary" type="button">Показать батч на доске</button>
       <button id="collapseAll" class="secondary" type="button">Свернуть все раскрытые истории</button>
@@ -167,11 +147,20 @@
       <button id="deleteBatch" class="danger" type="button">Удалить батч с доски</button>
       <div id="deleteProgress" class="progress" hidden><i></i></div>
       <p class="muted small">Удаление убирает карточки, деку, картинки и подписи, которые создал бот. Остальное на доске остаётся.</p>
+      <hr />
+      <h2>Администраторы батча</h2>
+      <p class="muted small">Только они могут удалять и создавать батчи на этой доске и ставить или снимать APPROVED.</p>
+      <div id="adminList" class="admins"></div>
+      <div class="row-links"><button id="adminSelf" class="link" type="button">Сделать меня администратором</button></div>
+      <select id="adminAdd" aria-label="Добавить администратора"></select>
+      <p id="rightsNote" class="muted small"></p>
+      <hr />
+      <h2>Журнал</h2>
+      <p class="muted small">Кто и что делал с этим батчем, и в чём бот отказал. Последние 40 записей.</p>
+      <div id="journal" class="journal"></div>
     </section>
-
     <div id="log" class="log" aria-live="polite"></div>
     <footer class="foot"><span id="version"></span></footer>
-
-    <script src="panel.js?v=0.5.0"></script>
+    <script src="panel.js?v=0.6.0"></script>
   </body>
 </html>
