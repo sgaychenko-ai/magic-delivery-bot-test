@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SGG Delivery Bot</title>
-    <link rel="stylesheet" href="panel.css?v=0.4.2" />
+    <link rel="stylesheet" href="panel.css?v=0.5.0" />
     <script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
-    <script src="core.js?v=0.4.2"></script>
+    <script src="core.js?v=0.5.0"></script>
   </head>
   <body>
     <div id="stale" class="legacy" hidden></div>
@@ -47,14 +47,27 @@
           <b>Кинь картинку на доску</b>
           <span>или перетащи файл сюда, или вставь из буфера</span>
         </div>
-        <input id="file" type="file" accept="image/*" hidden />
+        <input id="file" type="file" accept="image/*" multiple hidden />
       </div>
       <div class="row-links">
-        <button id="pickFile" class="link" type="button">Выбрать файл</button>
-        <button id="takeSelected" class="link" type="button">Взять выделенную на доске</button>
+        <button id="pickFile" class="link" type="button">Выбрать файлы</button>
+        <button id="takeSelected" class="link" type="button">Взять выделенные на доске</button>
         <span id="queueInfo" class="muted"></span>
       </div>
 
+      <!-- Несколько картинок сразу: список, у каждой персонаж и стадия -->
+      <div id="batchBox" class="batchbox" hidden>
+        <div class="batch-head"><b id="batchTitle"></b><button id="batchClear" class="link" type="button">Очистить список</button></div>
+        <div class="batch-all">
+          <select id="allChar" aria-label="Персонаж для всех"></select>
+          <select id="allType" aria-label="Стадия для всех"></select>
+        </div>
+        <div id="rows" class="rows"></div>
+        <p id="batchNote" class="muted small"></p>
+        <button id="placeAll" class="primary" type="button" disabled>Разложить всё</button>
+      </div>
+
+      <div id="single">
       <label class="field">
         <span>Персонаж</span>
         <select id="charSelect"></select>
@@ -95,6 +108,7 @@
       <div class="actions">
         <button id="place" class="primary" type="button" disabled>Разложить</button>
         <button id="skip" class="secondary" type="button" disabled>Пропустить</button>
+      </div>
       </div>
     </section>
 
@@ -158,6 +172,6 @@
     <div id="log" class="log" aria-live="polite"></div>
     <footer class="foot"><span id="version"></span></footer>
 
-    <script src="panel.js?v=0.4.2"></script>
+    <script src="panel.js?v=0.5.0"></script>
   </body>
 </html>

@@ -5,7 +5,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '0.4.2';
+  const VERSION = '0.5.0';
   const MARK = 'SGG-BOT';
   const COLLECTION = 'sgg-delivery';
   const FORMAT = 5; // формат батча: 5 = над ячейкой фидбека появилась плашка Feedback, ячейка стала больше
@@ -134,6 +134,52 @@
     } catch (e) { return null; }
   }
   const CHANNEL = 'sgg-delivery-bot'; // по этому каналу панель спрашивает невидимую часть бота, какой она версии
+
+  // ---------- имя файла ----------
+  // Художники называют файлы по персонажу и стадии. Слова стадий — от длинных к коротким, ищутся целыми словами.
+  const STAGE_WORDS = [
+    ['fb_client', ['client feedback', 'feedback client', 'client fb', 'fb client']],
+    ['fb_lead', ['lead feedback', 'feedback lead', 'lead fb', 'fb lead']],
+    ['mid', ['mid render', 'midrender', 'mid']],
+    ['color', ['color sketch', 'colour sketch', 'colorsketch', 'colour', 'color', 'clr']],
+    ['pose', ['bw poses', 'b w poses', 'bw pose', 'b w pose', 'bwpose', 'poses', 'pose']],
+    ['design', ['bw design', 'b w design', 'bwdesign', 'design', 'bw', 'b w']],
+    ['mood', ['moodboard', 'mood board', 'mood', 'references', 'refs']],
+    ['face', ['portrait', 'headshot', 'face']],
+    ['render', ['final render', 'render', 'final']],
+    ['sketch', ['wip', 'sketch']],
+  ];
+  /** Имя к виду «слова через пробел»: CamelCase и цифры отделяются, регистр и разделители не важны. */
+  function normName(s) {
+    return ' ' + String(s || '').replace(/\.[a-z0-9]{2,5}$/i, '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Za-zА-Яа-яЁё])(\d)/g, '$1 $2').replace(/(\d)([A-Za-zА-Яа-яЁё])/g, '$1 $2')
+      .toLowerCase().replace(/[^a-z0-9а-яё]+/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
+  }
+  /**
+   * Персонаж, стадия и задача Jira из имени файла. chars — персонажи батча [{ id, name }].
+   * → { charId|null, typeId|null, jira|null }. Ничего не угадывает наугад: нет совпадения — null.
+   */
+  function parseFileName(name, chars) {
+    const raw = String(name || ''), n = normName(raw), compact = n.replace(/ /g, '');
+    const out = { charId: null, typeId: null, jira: null };
+    const jm = raw.match(/(?:^|[^A-Za-z0-9])([A-Z][A-Z0-9]{1,9}-\d{1,6})(?![A-Za-z0-9])/);
+    if (jm) out.jira = jm[1];
+    let best = 0;
+    for (const [typeId, words] of STAGE_WORDS) for (const w of words) if (w.length > best && n.indexOf(' ' + w + ' ') >= 0) { best = w.length; out.typeId = typeId; }
+    // Персонаж: сначала по имени (самое длинное совпадение), потом по номеру — «char 3», «ch03», «c03».
+    best = 0;
+    for (const ch of chars || []) {
+      const cn = normName(ch.name).trim(), cc = cn.replace(/ /g, '');
+      if (!cn) continue;
+      const hit = n.indexOf(' ' + cn + ' ') >= 0 || (cc.length >= 5 && compact.indexOf(cc) >= 0);
+      if (hit && cn.length > best) { best = cn.length; out.charId = ch.id; }
+    }
+    if (!out.charId) {
+      const m = n.match(/ (?:character|char|ch|c|perso|персонаж) ?0*(\d{1,3}) /);
+      const i = m ? parseInt(m[1], 10) - 1 : -1;
+      if (chars && i >= 0 && i < chars.length) out.charId = chars[i].id;
+    }
+    return out;
+  }
 
   /** Ссылка на Jira: полный URL, либо ключ задачи + базовый адрес из настроек батча. */
   function normalizeJira(input, base) {
@@ -1250,6 +1296,6 @@
 
   return {
     VERSION, MARK, FORMAT, STATUSES, STATUS_BY_ID, STAGES, STAGE_COLS, PHASES, TYPES, TYPE_BY_ID, DECKS, DECK_BY_KEY, DEFAULT_CHARACTERS, L,
-    create, latestVersion, CHANNEL, plainText, pickImages, isBotImage, normalizeJira, shortName, phaseOfStage, deckGrid, deckSlot, archiveSlot, archiveLayout, isBundle, bundleIds, fitSide, timeline, pastSubmits, entryTitle, esc, ddmm,
+    create, latestVersion, CHANNEL, plainText, parseFileName, pickImages, isBotImage, normalizeJira, shortName, phaseOfStage, deckGrid, deckSlot, archiveSlot, archiveLayout, isBundle, bundleIds, fitSide, timeline, pastSubmits, entryTitle, esc, ddmm,
   };
 });

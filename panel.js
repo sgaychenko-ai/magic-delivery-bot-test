@@ -13,7 +13,9 @@
     team: [], recs: {},
     touched: { char: false, type: false }, // что человек выбрал сам для текущей картинки — это бот не трогает
     hint: '',
+    rows: [], placingAll: false, // пакетная раскладка: несколько картинок сразу
   };
+  let rowSeq = 0;
   const seen = new Set(); // картинки, про которые бот уже спрашивал
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -90,14 +92,17 @@
   }
 
   // ---------- очередь ----------
+  const isQueued = (id) => state.queue.some((q) => q.id === id) || (state.current && state.current.id === id) || state.rows.some((r) => r.id === id && r.status !== 'done');
+  /** Одна картинка — обычная форма. Две и больше — список, где у каждой свой персонаж и стадия. */
   function enqueue(entries) {
-    for (const e of entries) {
-      if (e.kind === 'board' && (state.queue.some((q) => q.id === e.id) || (state.current && state.current.id === e.id))) continue;
-      if (e.kind === 'board') seen.add(e.id);
-      state.queue.push(e);
-    }
+    const fresh = entries.filter((e) => !(e.kind === 'board' && isQueued(e.id)));
+    fresh.forEach((e) => { if (e.kind === 'board') seen.add(e.id); });
+    if (!fresh.length) return;
     if (state.view !== 'Delivery' && state.batch) showView('Delivery');
-    pump();
+    const pending = state.queue.length + (state.current ? 1 : 0) + (state.loading ? 1 : 0);
+    if (state.rows.length || pending + fresh.length >= 2) toRows(fresh);
+    else { state.queue.push(...fresh); pump(); }
+    render();
   }
 
   async function guessFor(item) {
@@ -127,24 +132,27 @@
     render();
     const t0 = performance.now();
     try {
-      let raw = next.dataUrl, guess = null;
+      let raw = next.dataUrl, guess = null, name = next.name || '';
       if (next.kind === 'board') {
         const item = await core.getItem(next.id);
         if (!item) throw new Error('Картинку уже убрали с доски.');
         if (SGG.isBotImage(item)) { state.loading = false; pump(); return; }
+        name = item.title || '';
         // Файл и догадку «куда бросили» получаем одновременно; зоны батча уже читаются в фоне.
         const got = await Promise.all([dataUrlOf(item), guessFor(item)]);
         raw = got[0]; guess = got[1];
       }
       const ready = await prepare(raw);
-      state.current = { kind: next.kind, id: next.id || null, dataUrl: ready.dataUrl, deckDataUrl: ready.deckDataUrl, natural: ready.natural, took: (performance.now() - t0) / 1000 };
-      // Догадка по месту, куда бросили, приходит с задержкой. Если человек уже выбрал сам — его выбор главнее.
-      if (guess) {
-        const took = [];
-        if (!state.touched.char && guess.charId) { state.charId = guess.charId; took.push((state.batch.chars.find((c) => c.id === guess.charId) || {}).name); }
-        if (!state.touched.type && guess.typeId) { state.typeId = guess.typeId; took.push(SGG.TYPE_BY_ID[guess.typeId].label); }
-        state.hint = took.length ? 'Выбрал по месту, куда бросили: ' + took.join(' · ') + '. Можно поменять.' : '';
-      }
+      state.current = { kind: next.kind, id: next.id || null, name, dataUrl: ready.dataUrl, deckDataUrl: ready.deckDataUrl, natural: ready.natural, took: (performance.now() - t0) / 1000 };
+      // Догадки приходят с задержкой. Имя файла главнее места, а выбор человека главнее любой догадки.
+      const byName = state.batch ? SGG.parseFileName(name, state.batch.chars) : {};
+      const took = [];
+      const pickChar = byName.charId || (guess && guess.charId), pickType = byName.typeId || (guess && guess.typeId);
+      if (!state.touched.char && pickChar) { state.charId = pickChar; took.push((state.batch.chars.find((c) => c.id === pickChar) || {}).name); }
+      if (!state.touched.type && pickType) { state.typeId = pickType; took.push(SGG.TYPE_BY_ID[pickType].label); }
+      if (byName.jira && !$('jira').value) $('jira').value = byName.jira;
+      state.hint = took.length ? 'Выбрал ' + (byName.charId || byName.typeId ? 'по имени файла' : 'по месту, куда бросили') + ': ' + took.join(' · ') + '. Можно поменять.' : '';
+      if (state.rows.length) { moveCurrentToRows(); state.loading = false; render(); return; } // пока грузилась, пришли ещё картинки
     } catch (e) {
       fail('Не получилось взять картинку', e);
     }
@@ -159,6 +167,205 @@
     state.touched = { char: false, type: false };
     state.hint = '';
     pump();
+  }
+
+  // ---------- пакетная раскладка ----------
+  const rowsLeft = () => state.rows.filter((r) => r.status !== 'done');
+
+  /** Переводит в список всё, что ждёт раскладки: текущую картинку из формы, очередь и новые. */
+  function toRows(fresh) {
+    if (state.current) moveCurrentToRows();
+    const waiting = state.queue.splice(0);
+    for (const e of waiting.concat(fresh)) addRow(e);
+  }
+  function moveCurrentToRows() {
+    const c = state.current;
+    state.current = null;
+    const row = addRow({ kind: c.kind, id: c.id, name: c.name }, { data: c, charId: state.charId, typeId: state.typeId, touched: Object.assign({}, state.touched) });
+    if ($('jira').value) row.jira = $('jira').value.trim();
+    state.typeId = null; state.touched = { char: false, type: false }; state.hint = '';
+  }
+
+  function addRow(e, preset) {
+    const row = Object.assign({ key: ++rowSeq, kind: e.kind, id: e.id || null, name: e.name || '', raw: e.dataUrl || null, data: null, charId: null, typeId: null, jira: '', touched: { char: false, type: false }, status: 'loading', msg: 'Беру картинку…', src: '' }, preset || {});
+    if (row.data) { row.status = 'ready'; row.msg = ''; }
+    state.rows.push(row);
+    buildRow(row);
+    row.loadP = row.data ? Promise.resolve() : loadRow(row);
+    updateRow(row);
+    return row;
+  }
+
+  let loadingRows = 0;
+  const loadWaiters = [];
+  async function loadRow(row) {
+    while (loadingRows >= 3) await new Promise((r) => loadWaiters.push(r)); // не больше трёх файлов разом
+    loadingRows++;
+    try {
+      let raw = row.raw, guess = null;
+      if (row.kind === 'board') {
+        const item = await core.getItem(row.id);
+        if (!item) throw new Error('Картинку уже убрали с доски.');
+        row.name = row.name || item.title || '';
+        const got = await Promise.all([dataUrlOf(item), guessFor(item)]);
+        raw = got[0]; guess = got[1];
+      }
+      row.data = await prepare(raw);
+      // Имя файла главнее места на доске, а выбор человека главнее любой догадки.
+      const byName = SGG.parseFileName(row.name, state.batch ? state.batch.chars : []);
+      const c = byName.charId || (guess && guess.charId), t = byName.typeId || (guess && guess.typeId);
+      let fromName = false, fromPlace = false;
+      if (!row.touched.char && c) { row.charId = c; if (byName.charId) fromName = true; else fromPlace = true; }
+      if (!row.touched.type && t) { row.typeId = t; if (byName.typeId) fromName = true; else fromPlace = true; }
+      if (byName.jira && !row.jira) row.jira = byName.jira;
+      row.src = fromName ? 'по имени файла' : fromPlace ? 'по месту на доске' : '';
+      row.status = 'ready'; row.msg = '';
+    } catch (e) {
+      row.status = 'err'; row.msg = 'Не получилось взять картинку: ' + (e && e.message ? e.message : e);
+    } finally {
+      loadingRows--;
+      const next = loadWaiters.shift();
+      if (next) next();
+    }
+    updateRow(row);
+    render();
+  }
+
+  function typeSelect(sel, empty) {
+    sel.innerHTML = '';
+    sel.add(new Option(empty, ''));
+    const groups = { stage: 'Стадия', extra: 'Дополнительно', fb: 'Фидбек' };
+    for (const g of Object.keys(groups)) {
+      const og = document.createElement('optgroup');
+      og.label = groups[g];
+      for (const t of SGG.TYPES.filter((x) => x.group === g)) og.append(new Option(t.label, t.id));
+      sel.append(og);
+    }
+  }
+  function charSelect(sel, empty) {
+    sel.innerHTML = '';
+    sel.add(new Option(empty, ''));
+    for (const ch of (state.batch ? state.batch.chars : [])) sel.add(new Option(ch.name, ch.id));
+  }
+
+  function buildRow(row) {
+    const el = document.createElement('div');
+    el.className = 'row-item';
+    const img = document.createElement('img');
+    img.className = 'row-thumb'; img.alt = '';
+    const main = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'row-name';
+    const sel = document.createElement('div');
+    sel.className = 'row-sel';
+    const cs = document.createElement('select'), ts = document.createElement('select');
+    cs.setAttribute('aria-label', 'Персонаж'); ts.setAttribute('aria-label', 'Стадия');
+    charSelect(cs, '— персонаж —');
+    typeSelect(ts, '— стадия —');
+    cs.addEventListener('change', () => { row.charId = cs.value || null; row.touched.char = true; row.src = ''; updateRow(row); render(); });
+    ts.addEventListener('change', () => { row.typeId = ts.value || null; row.touched.type = true; row.src = ''; updateRow(row); render(); });
+    sel.append(cs, ts);
+    const msg = document.createElement('div');
+    msg.className = 'row-msg';
+    main.append(name, sel, msg);
+    const x = document.createElement('button');
+    x.type = 'button'; x.className = 'row-x'; x.textContent = '×'; x.setAttribute('aria-label', 'Убрать из списка');
+    x.addEventListener('click', () => {
+      state.rows = state.rows.filter((r) => r !== row);
+      el.remove();
+      if (!rowsLeft().length) clearRows(); else render();
+    });
+    el.append(img, main, x);
+    $('rows').append(el);
+    row.el = { el, img, name, cs, ts, msg, x };
+  }
+
+  function updateRow(row) {
+    const u = row.el;
+    if (!u) return;
+    u.el.className = 'row-item ' + row.status;
+    if (row.data && u.img.getAttribute('src') !== row.data.dataUrl) u.img.src = row.data.dataUrl;
+    u.name.textContent = (row.name || (row.kind === 'board' ? 'картинка с доски' : 'файл')) + (row.src ? ' · ' + row.src : '');
+    u.cs.value = row.charId || ''; u.ts.value = row.typeId || '';
+    u.cs.classList.toggle('empty', !row.charId); u.ts.classList.toggle('empty', !row.typeId);
+    const locked = row.status === 'busy' || row.status === 'done' || state.placingAll;
+    u.cs.disabled = locked; u.ts.disabled = locked;
+    u.x.disabled = row.status === 'busy' || state.placingAll;
+    u.msg.textContent = row.msg || '';
+  }
+
+  function clearRows() {
+    state.rows = [];
+    $('rows').innerHTML = '';
+    render();
+    pump();
+  }
+
+  function renderRows() {
+    const left = rowsLeft();
+    const ready = left.filter((r) => r.status !== 'loading' && r.data && r.charId && r.typeId);
+    const missing = left.filter((r) => r.status !== 'loading' && r.data && (!r.charId || !r.typeId)).length;
+    const loading = left.filter((r) => r.status === 'loading').length;
+    $('batchTitle').textContent = 'Картинок: ' + left.length;
+    $('placeAll').disabled = state.placingAll || state.busy || !ready.length;
+    $('placeAll').textContent = state.placingAll ? 'Раскладываю…' : 'Разложить всё' + (ready.length ? ' (' + ready.length + ')' : '');
+    const notes = [];
+    if (loading) notes.push('Ещё грузятся: ' + loading + '.');
+    if (missing) notes.push('Без персонажа или стадии: ' + missing + ' — их выбери в строке или через «Всем».');
+    $('batchNote').textContent = notes.join(' ');
+    $('allChar').disabled = $('allType').disabled = state.placingAll;
+  }
+
+  /** Раскладывает весь список. У одного персонажа — строго по порядку строк, разных персонажей — по три одновременно. */
+  async function placeAll() {
+    if (state.placingAll) return;
+    const todo = rowsLeft().filter((r) => r.status !== 'loading' && r.data && r.charId && r.typeId);
+    if (!todo.length) return;
+    state.placingAll = true;
+    state.rows.forEach(updateRow);
+    render();
+    const t0 = performance.now();
+    try { const u = await board.getUserInfo(); state.user = { id: u.id, name: u.name || '' }; } catch (e) { /* остаётся прежнее имя */ }
+    const groups = new Map();
+    for (const r of todo) { if (!groups.has(r.charId)) groups.set(r.charId, []); groups.get(r.charId).push(r); }
+    const queue = [...groups.values()];
+    let ok = 0;
+    const worker = async () => {
+      for (let g = queue.shift(); g; g = queue.shift()) {
+        for (const r of g) {
+          r.status = 'busy'; r.msg = 'Раскладываю…'; updateRow(r);
+          try {
+            const res = await core.place({
+              batch: state.batch, charId: r.charId, typeId: r.typeId, dataUrl: r.data.dataUrl, deckDataUrl: r.data.deckDataUrl, natural: r.data.natural,
+              jira: r.jira, userName: state.user.name, sourceItemId: r.kind === 'board' ? r.id : null,
+            });
+            r.status = 'done'; ok++;
+            r.msg = '✓ ' + res.title + (res.deckOnly ? ' — в деке' : res.deckTitle ? ' — в карточке и в деке' : ' — в карточке') + (res.warnings.length ? ' · ' + res.warnings.join(' ') : '');
+            state.recs[r.charId] = res.rec;
+            if (r.charId === state.charId) state.rec = res.rec;
+          } catch (e) {
+            r.status = 'err'; r.msg = 'Не разложил: ' + (e && e.message ? e.message : e);
+            console.error('[SGG bot]', e);
+          }
+          updateRow(r);
+        }
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    state.placingAll = false;
+    const bad = todo.length - ok;
+    log('Разложено ' + ok + ' из ' + todo.length + ' за ' + ((performance.now() - t0) / 1000).toFixed(1) + ' с' + (bad ? ' · с ошибкой: ' + bad + ' — они остались в списке' : ''), bad ? 'warn' : 'ok');
+    if (state.user.name && state.team.indexOf(state.user.name) < 0) state.team.push(state.user.name);
+    state.rows.forEach(updateRow);
+    render();
+    // Разложенные уходят из списка; остаются те, что не получились или ещё не заполнены, — их можно поправить и разложить снова.
+    setTimeout(() => {
+      for (const r of state.rows.filter((x) => x.status === 'done')) r.el.el.remove();
+      state.rows = state.rows.filter((x) => x.status !== 'done');
+      for (const r of state.rows) if (r.status === 'err' && r.data) r.status = 'ready';
+      if (!state.rows.length) clearRows(); else { state.rows.forEach(updateRow); render(); }
+    }, bad ? 900 : 1500);
+    await loadChar();
   }
 
   // ---------- батчи ----------
@@ -207,6 +414,8 @@
       for (const ch of state.batch.chars) cs.add(new Option(ch.name, ch.id));
       cs.value = state.charId || '';
     }
+    charSelect($('allChar'), 'Всем: персонаж…');
+    for (const r of state.rows) if (r.el) { charSelect(r.el.cs, '— персонаж —'); updateRow(r); }
   }
 
   /** Невидимая часть бота сообщила, что на доске переименовали персонажа: подхватываем имена без перезагрузки панели. */
@@ -256,6 +465,7 @@
       b.addEventListener('click', () => { state.typeId = t.id; state.touched.type = true; state.hint = ''; if (t.primary && state.rec) $('jira').value = state.rec.jiraInput || ''; setIter('new'); render(); });
       $('types-' + t.group).append(b);
     }
+    typeSelect($('allType'), 'Всем: стадия…');
     $('statusAfter').add(new Option('Авто', ''));
     for (const s of SGG.STATUSES) {
       $('statusAfter').add(new Option(s.label, s.id));
@@ -357,11 +567,15 @@
     const rec = state.rec;
 
     // Доставка
-    $('thumb').hidden = !state.current;
-    $('dropHint').hidden = !!state.current;
+    const many = state.rows.length > 0;
+    $('single').hidden = many;
+    $('batchBox').hidden = !many;
+    if (many) renderRows();
+    $('thumb').hidden = many || !state.current;
+    $('dropHint').hidden = !many && !!state.current;
     if (state.current) $('thumb').src = state.current.dataUrl; else $('thumb').removeAttribute('src');
-    $('dropHint').firstElementChild.textContent = state.loading ? 'Беру картинку…' : 'Кинь картинку на доску';
-    $('queueInfo').textContent = state.queue.length ? 'в очереди ещё ' + state.queue.length : '';
+    $('dropHint').firstElementChild.textContent = many ? 'Добавить ещё картинки' : state.loading ? 'Беру картинку…' : 'Кинь картинку на доску';
+    $('queueInfo').textContent = !many && state.queue.length ? 'в очереди ещё ' + state.queue.length : '';
     $('charSelect').value = state.charId || '';
     $('guessNote').hidden = !state.hint;
     $('guessNote').textContent = state.hint;
@@ -512,10 +726,12 @@
   }
 
   async function addFiles(files) {
+    const entries = [];
     for (const f of files) {
       if (!f || String(f.type).indexOf('image/') !== 0) { log('«' + (f && f.name) + '» — не картинка, пропустил.', 'warn'); continue; }
-      try { enqueue([{ kind: 'file', dataUrl: await readFile(f), name: f.name }]); } catch (e) { fail('Файл', e); }
+      try { entries.push({ kind: 'file', dataUrl: await readFile(f), name: f.name }); } catch (e) { fail('Файл', e); }
     }
+    if (entries.length) enqueue(entries); // все разом: несколько файлов сразу попадают в список
   }
 
   // ---------- привязка кнопок ----------
@@ -539,6 +755,21 @@
   $('charSelect2').addEventListener('change', onChar);
   document.querySelectorAll('input[name="iter"]').forEach((r) => r.addEventListener('change', render));
   $('place').addEventListener('click', doPlace);
+  $('placeAll').addEventListener('click', () => placeAll().catch((e) => { state.placingAll = false; fail('Не разложил', e); render(); }));
+  $('batchClear').addEventListener('click', () => { if (!state.placingAll) { log('Список очищен — картинки остались на доске как были.'); clearRows(); } });
+  // «Всем»: один персонаж или одна стадия на весь список. Строки, которые уже раскладываются, не трогаем.
+  $('allChar').addEventListener('change', (e) => {
+    const v = e.target.value; e.target.value = '';
+    if (!v) return;
+    for (const r of rowsLeft()) if (r.status !== 'busy') { r.charId = v; r.touched.char = true; r.src = ''; updateRow(r); }
+    render();
+  });
+  $('allType').addEventListener('change', (e) => {
+    const v = e.target.value; e.target.value = '';
+    if (!v) return;
+    for (const r of rowsLeft()) if (r.status !== 'busy') { r.typeId = v; r.touched.type = true; r.src = ''; updateRow(r); }
+    render();
+  });
   $('skip').addEventListener('click', () => { log('Пропустил — картинка осталась как была.'); finishCurrent(); });
   $('takeSelected').addEventListener('click', takeSelected);
   $('pickFile').addEventListener('click', () => $('file').click());
