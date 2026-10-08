@@ -368,7 +368,7 @@
     document.querySelectorAll('.chip').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.type === state.typeId)));
     $('jiraField').hidden = !(type && type.primary);
     // Та же стадия, что сейчас в карточке: это новая итерация или перезалив текущей?
-    const same = !!(ch && type && rec && rec.pv && !type.fb && rec.pv.type === type.id);
+    const same = !!(ch && type && rec && rec.pv && !type.fb && !type.deckOnly && rec.pv.type === type.id);
     $('iterBox').hidden = !same;
     if (!same) setIter('new');
     const redo = same && iterMode() === 'redo';
@@ -376,12 +376,15 @@
       $('iterNew').textContent = 'Новая итерация — v' + (rec.pv.v + 1);
       $('iterRedo').textContent = 'Перезалить текущую v' + rec.pv.v;
     }
-    const auto = !type ? '' : redo ? 'не менять' : SGG.STATUS_BY_ID[type.fb ? 'fixes' : 'internal'].label;
+    const auto = !type ? '' : redo || type.deckOnly ? 'не менять' : SGG.STATUS_BY_ID[type.fb ? 'fixes' : 'internal'].label;
     $('statusAfter').options[0].textContent = auto ? 'Авто: ' + auto : 'Авто';
 
     let route = '';
     if (ch && type && rec) {
-      if (type.fb) {
+      if (type.deckOnly) {
+        route = 'Встанет только в Comparison Deck, в «' + SGG.DECK_BY_KEY[type.deck].title + '». Карточка «' + ch.name + '» не меняется.';
+        if (rec.deck && rec.deck[type.deck]) route += ' Прежняя картинка там заменится.';
+      } else if (type.fb) {
         route = 'Встанет в блок фидбека карточки «' + ch.name + '»' + (rec.pv ? ' — к ' + SGG.entryTitle(rec.pv) : '') + '.';
         if (rec.fb) route += ' Прежний фидбек уйдёт в историю.';
       } else if (redo) {
@@ -455,7 +458,8 @@
       state.rec = res.rec;
       state.recs[state.charId] = res.rec;
       if (state.user.name && state.team.indexOf(state.user.name) < 0) state.team.push(state.user.name);
-      let line = res.charName + ' · ' + res.title + (res.replaced ? ' — перезалит в карточке' : ' — в карточке') + (res.deckTitle ? ' и в деке «' + res.deckTitle + '»' : '');
+      let line = res.charName + ' · ' + res.title + (res.deckOnly ? ' — в деке «' + res.deckTitle + '», карточка не менялась'
+        : (res.replaced ? ' — перезалит в карточке' : ' — в карточке') + (res.deckTitle ? ' и в деке «' + res.deckTitle + '»' : ''));
       if (res.archived) line += ', в архив ушло: ' + res.archived;
       if (res.notes) line += ' (с прошлой картинкой уехало заметок: ' + res.notes + ')';
       line += ' · статус ' + SGG.STATUS_BY_ID[res.status].label;

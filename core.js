@@ -5,7 +5,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '0.4.1';
+  const VERSION = '0.4.2';
   const MARK = 'SGG-BOT';
   const COLLECTION = 'sgg-delivery';
   const FORMAT = 5; // формат батча: 5 = над ячейкой фидбека появилась плашка Feedback, ячейка стала больше
@@ -60,7 +60,8 @@
     { id: 'color', label: 'Color Sketch', en: 'Color Sketch', group: 'stage', stage: 'color', deck: 'sketch', short: 'Color', primary: true, color: '#D85A30' },
     { id: 'mid', label: 'Mid Render', en: 'Mid Render', group: 'stage', stage: 'mid', deck: null, short: 'Mid', color: '#1D9E75' },
     { id: 'render', label: 'Render', en: 'Render', group: 'stage', stage: 'render', deck: 'render', short: 'Render', primary: true, color: '#0F6E56' },
-    { id: 'face', label: 'Лицо', en: 'Portrait', group: 'extra', stage: null, deck: 'portrait', short: 'Face', color: '#888780' },
+    // Портрет нужен только для сравнения: он встаёт в секцию Portraits деки, карточку персонажа не трогает (deckOnly).
+    { id: 'face', label: 'Портрет', en: 'Portrait', group: 'extra', stage: null, deck: 'portrait', deckOnly: true, short: 'Face', color: '#888780' },
     { id: 'sketch', label: 'Скетч / WIP', en: 'Sketch / WIP', group: 'extra', stage: null, deck: null, short: 'WIP', color: '#888780' },
     { id: 'fb_lead', label: 'Фидбек лида', en: 'Lead feedback', group: 'fb', fb: 'lead', color: '#7F77DD', tint: '#EEEDFE' },
     { id: 'fb_client', label: 'Фидбек клиента', en: 'Client feedback', group: 'fb', fb: 'client', color: '#378ADD', tint: '#E6F1FB' },
@@ -976,6 +977,44 @@
     }
 
     /**
+     * Доставка только в Comparison Deck (портрет): картинка встаёт на место персонажа в секции, прежняя там заменяется.
+     * Карточка персонажа не меняется: превью, история, стадии и статус остаются как были.
+     */
+    async function placeInDeck(opts, ch, type, deck) {
+      const batch = opts.batch;
+      const [rec, zone, idx] = await Promise.all([
+        getChar(batch.id, ch.id),
+        zoneOf(batch.zones['deck:' + deck.key], deck.title),
+        deckIndex(batch.id, deck.key, ch.id),
+      ]);
+      const v = (rec.vers[type.id] || 0) + 1, by = opts.userName || '';
+      const name = type.en + ' v' + v;
+      const slot = deckSlot(zone.rect, deckGrid(zone.rect), idx);
+      const d = await drawAt(slot, zone.frame, {
+        dataUrl: opts.deckDataUrl || opts.dataUrl, natural: opts.natural, color: '#555555',
+        title: [MARK, batch.name, ch.name, name].join(' · '), caption: deckCaption(ch.name, deck, type),
+      });
+      const warnings = [];
+      if (slot.overflow) warnings.push('В секции «' + deck.title + '» кончилось место — растяни фрейм вниз.');
+      if (!d.attached) warnings.push('Картинка лежит поверх фрейма, но не прикрепилась к нему.');
+      const old = rec.deck[deck.key];
+      rec.deck[deck.key] = { img: d.img, cap: d.cap, type: type.id };
+      rec.vers[type.id] = v;
+      const setStatusToo = !!STATUS_BY_ID[opts.statusAfter] && opts.statusAfter !== rec.status; // статус меняется, только если его выбрали в форме
+      if (setStatusToo) rec.status = opts.statusAfter;
+      const tail = [store.set(charKey(batch.id, ch.id), rec)];
+      if (old) tail.push(removeIds([old.img, old.cap])); // в секции у персонажа одно место
+      if (opts.sourceItemId) tail.push(removeIds([opts.sourceItemId]));
+      if (by) tail.push(addToTeam(batch.id, by).catch(() => null));
+      if (setStatusToo) tail.push(refreshCard(batch, ch.id, rec, { status: true }));
+      await Promise.all(tail);
+      return {
+        v, isFeedback: false, replaced: false, deckOnly: true, title: name, cardImageId: d.img, deckTitle: deck.title,
+        archived: 0, notes: 0, status: rec.status, warnings, charName: ch.name, typeLabel: type.label, rec,
+      };
+    }
+
+    /**
      * Доставка: коммит стадии или фидбек.
      * opts: { batch, charId, typeId, dataUrl, deckDataUrl?, natural:{w,h}, jira, userName, sourceItemId, statusAfter?, replace? }
      * replace — перезалив: картинка заменяет текущую итерацию этой же стадии, номер итерации не растёт.
@@ -989,6 +1028,7 @@
       const ui = batch.ui[ch.id];
       const isFb = !!type.fb;
       const deck = type.deck ? DECK_BY_KEY[type.deck] : null;
+      if (type.deckOnly && deck) return placeInDeck(opts, ch, type, deck);
 
       // Раскрытую историю сначала сворачиваем: новая картинка встаёт в обычную карточку.
       const before = await getChar(batch.id, ch.id);
